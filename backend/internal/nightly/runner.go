@@ -12,6 +12,8 @@
 //	         wait until teaser queues are idle
 //	Phase 3: spider91 → cloud migration (single sweep, captcha cooldown still
 //	         honored within this call)
+//	Phase 4: cleanup duplicate local preview/thumbnail assets after sampled
+//	         fingerprints have identified canonical videos
 //
 // A 6h soft deadline guards each pipeline run; phases check deadline at their
 // boundaries and exit cleanly if exceeded (no in-flight ffmpeg / upload is
@@ -84,6 +86,11 @@ type Config struct {
 
 	// RunMigration runs spider91migrate.Migrator.RunOnce for Phase 3.
 	RunMigration func(ctx context.Context) error
+
+	// RunDedupeAssetCleanup removes generated local assets from non-canonical
+	// videos in size+sampled_sha256 duplicate groups. It must not delete cloud
+	// files or catalog rows.
+	RunDedupeAssetCleanup func(ctx context.Context) error
 
 	// Now is injected for tests; nil → time.Now.
 	Now func() time.Time
@@ -241,6 +248,7 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	}
 	if len(spiderIDs) == 0 {
 		log.Printf("[nightly] phase 2/3 skipped: no spider91 drive configured")
+		r.runDedupeAssetCleanupPhase(ctx)
 		return
 	}
 	log.Printf("[nightly] phase 2: crawling %d spider91 drive(s)", len(spiderIDs))
@@ -267,6 +275,8 @@ func (r *Runner) runPipeline(ctx context.Context) {
 			log.Printf("[nightly] phase 3 migration: %v", err)
 		}
 	}
+
+	r.runDedupeAssetCleanupPhase(ctx)
 }
 
 // checkDeadline returns true when ctx is already done (runner shutting down or
@@ -290,6 +300,19 @@ func (r *Runner) waitIdle(ctx context.Context, phase string) error {
 		return err
 	}
 	return nil
+}
+
+func (r *Runner) runDedupeAssetCleanupPhase(ctx context.Context) {
+	if r.checkDeadline(ctx, "phase 4") {
+		return
+	}
+	if r.cfg.RunDedupeAssetCleanup == nil {
+		return
+	}
+	log.Printf("[nightly] phase 4: duplicate asset cleanup")
+	if err := r.cfg.RunDedupeAssetCleanup(ctx); err != nil {
+		log.Printf("[nightly] phase 4 duplicate asset cleanup: %v", err)
+	}
 }
 
 // readLastRunDate reads the persisted last_run_date or returns "" when unset.

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -18,8 +20,10 @@ import (
 )
 
 const (
-	maxSmallUploadSize = 250 * 1024 * 1024
-	defaultRenewAPIURL = "https://api.oplist.org/onedrive/renewapi"
+	maxSmallUploadSize   = 250 * 1024 * 1024
+	defaultRenewAPIURL   = "https://api.oplist.org/onedrive/renewapi"
+	onedriveListCooldown = 5 * time.Minute
+	onedriveListInterval = 1 * time.Second
 )
 
 type Driver struct {
@@ -34,6 +38,11 @@ type Driver struct {
 	renewAPIURL   string
 	client        *resty.Client
 	onTokenUpdate func(access, refresh string)
+
+	listMu       sync.Mutex
+	lastListAt   time.Time
+	listInterval time.Duration
+	listCooldown time.Duration
 }
 
 type Config struct {
@@ -85,6 +94,8 @@ func New(c Config) *Driver {
 		client: resty.New().
 			SetTimeout(30*time.Second).
 			SetHeader("Accept", "application/json, text/plain, */*"),
+		listInterval: onedriveListInterval,
+		listCooldown: onedriveListCooldown,
 	}
 }
 
@@ -106,10 +117,16 @@ func (d *Driver) List(ctx context.Context, dirID string) ([]drives.Entry, error)
 	if dirID == "" {
 		dirID = d.rootID
 	}
+	d.listMu.Lock()
+	defer d.listMu.Unlock()
+
 	nextLink := d.childrenURL(dirID)
 	first := true
 	out := make([]drives.Entry, 0)
 	for nextLink != "" {
+		if err := d.waitForListSlotLocked(ctx); err != nil {
+			return nil, err
+		}
 		var resp filesResp
 		err := d.request(ctx, nextLink, http.MethodGet, func(req *resty.Request) {
 			if first {
@@ -120,6 +137,19 @@ func (d *Driver) List(ctx context.Context, dirID string) ([]drives.Entry, error)
 			}
 		}, &resp)
 		if err != nil {
+			if wait, ok := drives.RateLimitRetryAfter(err); ok {
+				if wait <= 0 {
+					wait = d.listCooldown
+					if wait <= 0 {
+						wait = onedriveListCooldown
+					}
+				}
+				log.Printf("[onedrive] list cooling down drive=%s dir=%s cooldown=%s err=%v", d.id, dirID, wait, err)
+				if err := sleepContext(ctx, wait); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			return nil, fmt.Errorf("onedrive list: %w", err)
 		}
 		for _, item := range resp.Value {
@@ -129,6 +159,36 @@ func (d *Driver) List(ctx context.Context, dirID string) ([]drives.Entry, error)
 		first = false
 	}
 	return out, nil
+}
+
+func (d *Driver) waitForListSlotLocked(ctx context.Context) error {
+	if d.listInterval <= 0 || d.lastListAt.IsZero() {
+		d.lastListAt = time.Now()
+		return ctx.Err()
+	}
+	next := d.lastListAt.Add(d.listInterval)
+	now := time.Now()
+	if now.Before(next) {
+		if err := sleepContext(ctx, next.Sub(now)); err != nil {
+			return err
+		}
+	}
+	d.lastListAt = time.Now()
+	return ctx.Err()
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (d *Driver) Stat(ctx context.Context, fileID string) (*drives.Entry, error) {
@@ -265,7 +325,7 @@ func (d *Driver) requestOnce(ctx context.Context, rawURL, method string, configu
 	if err != nil {
 		return err
 	}
-	if isRateLimitResponse(res, graphErr.Error.Code) {
+	if isRateLimitResponse(res, graphErr.Error.Code, graphErr.Error.Message) {
 		return onedriveRateLimitError(res, graphErr.Error.Message)
 	}
 	if graphErr.Error.Code != "" {
@@ -327,11 +387,54 @@ func (d *Driver) refresh(ctx context.Context) error {
 	return nil
 }
 
-func isRateLimitResponse(res *resty.Response, code string) bool {
-	if code == "TooManyRequests" || code == "activityLimitReached" {
+func isRateLimitResponse(res *resty.Response, code, message string) bool {
+	if isRateLimitCode(code) || isRateLimitMessage(message) {
 		return true
 	}
-	return res != nil && res.StatusCode() == http.StatusTooManyRequests
+	if res == nil {
+		return false
+	}
+	if res.StatusCode() == http.StatusTooManyRequests {
+		return true
+	}
+	if res.Header().Get("Retry-After") == "" {
+		return false
+	}
+	switch res.StatusCode() {
+	case http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRateLimitCode(code string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(code), "_", ""))
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	switch normalized {
+	case "toomanyrequests",
+		"activitylimitreached",
+		"throttledrequest",
+		"requestthrottled",
+		"resourcethrottled",
+		"applicationthrottled",
+		"tenantthrottled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRateLimitMessage(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "too many requests") ||
+		strings.Contains(text, "throttl") ||
+		strings.Contains(text, "rate limit") ||
+		strings.Contains(text, "activity limit") ||
+		strings.Contains(text, "temporarily blocked")
 }
 
 func onedriveRateLimitError(res *resty.Response, message string) error {

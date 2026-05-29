@@ -75,3 +75,105 @@ func TestListVideosDeduplicatesBySampledSHA256(t *testing.T) {
 		t.Fatalf("canonical id = %q, want earliest created video", items[0].ID)
 	}
 }
+
+func TestDuplicateAssetCleanupCandidates(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	base := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	videos := []*Video{
+		{
+			ID:            "drive-a-canonical",
+			DriveID:       "drive-a",
+			FileID:        "file-a",
+			FileName:      "canonical.mp4",
+			Title:         "Canonical",
+			Size:          1234,
+			ThumbnailURL:  "/p/thumb/drive-a-canonical",
+			PreviewLocal:  "/tmp/previews/canonical.mp4",
+			PreviewStatus: "ready",
+			PublishedAt:   base,
+			CreatedAt:     base,
+			UpdatedAt:     base,
+		},
+		{
+			ID:            "drive-b-duplicate",
+			DriveID:       "drive-b",
+			FileID:        "file-b",
+			FileName:      "duplicate.mp4",
+			Title:         "Duplicate",
+			Size:          1234,
+			ThumbnailURL:  "/p/thumb/drive-b-duplicate",
+			PreviewLocal:  "/tmp/previews/duplicate.mp4",
+			PreviewStatus: "ready",
+			PublishedAt:   base.Add(time.Second),
+			CreatedAt:     base.Add(time.Second),
+			UpdatedAt:     base.Add(time.Second),
+		},
+		{
+			ID:            "drive-c-remote-thumb",
+			DriveID:       "drive-c",
+			FileID:        "file-c",
+			FileName:      "remote-thumb.mp4",
+			Title:         "Remote Thumbnail",
+			Size:          1234,
+			ThumbnailURL:  "https://thumb.example/file-c.jpg",
+			PreviewStatus: "ready",
+			PublishedAt:   base.Add(2 * time.Second),
+			CreatedAt:     base.Add(2 * time.Second),
+			UpdatedAt:     base.Add(2 * time.Second),
+		},
+	}
+	for _, v := range videos {
+		if err := cat.UpsertVideo(ctx, v); err != nil {
+			t.Fatalf("seed %s: %v", v.ID, err)
+		}
+	}
+	const sampled = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, v := range videos {
+		if err := cat.UpdateVideoFingerprint(ctx, v.ID, sampled, "ready", ""); err != nil {
+			t.Fatalf("fingerprint %s: %v", v.ID, err)
+		}
+	}
+
+	items, err := cat.ListDuplicateAssetCleanupCandidates(ctx, 0)
+	if err != nil {
+		t.Fatalf("list cleanup candidates: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("candidates = %#v, want only local duplicate", items)
+	}
+	item := items[0]
+	if item.VideoID != "drive-b-duplicate" || item.CanonicalID != "drive-a-canonical" {
+		t.Fatalf("candidate = %#v, want duplicate with canonical", item)
+	}
+
+	if err := cat.ClearGeneratedAssets(ctx, item.VideoID, true, true); err != nil {
+		t.Fatalf("clear generated assets: %v", err)
+	}
+	got, err := cat.GetVideo(ctx, item.VideoID)
+	if err != nil {
+		t.Fatalf("get duplicate: %v", err)
+	}
+	if got.PreviewLocal != "" || got.PreviewStatus != "pending" {
+		t.Fatalf("preview after cleanup local=%q status=%q, want empty pending", got.PreviewLocal, got.PreviewStatus)
+	}
+	if got.ThumbnailURL != "" {
+		t.Fatalf("thumbnail after cleanup = %q, want empty", got.ThumbnailURL)
+	}
+	var thumbStatus string
+	if err := cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id = ?`, item.VideoID).Scan(&thumbStatus); err != nil {
+		t.Fatalf("query thumbnail status: %v", err)
+	}
+	if thumbStatus != "pending" {
+		t.Fatalf("thumbnail_status = %q, want pending", thumbStatus)
+	}
+}

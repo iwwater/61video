@@ -242,6 +242,7 @@ func main() {
 		RunSpider91Crawl:      app.runSpider91Crawl,
 		WaitPreviewQueuesIdle: app.waitAllPreviewQueuesIdle,
 		RunMigration:          app.spider91Migrator.RunOnce,
+		RunDedupeAssetCleanup: app.cleanupDuplicateVideoAssets,
 	})
 	go app.nightlyRunner.Run(ctx)
 
@@ -765,6 +766,9 @@ func (a *App) registerPreviewWorkers(ctx context.Context, driveID string, worker
 	}
 
 	go a.enqueueDriveGeneration(ctx, driveID, worker, thumbWorker)
+	if fingerprintWorker != nil {
+		go a.enqueueFingerprints(ctx, driveID, fingerprintWorker)
+	}
 }
 
 func (a *App) enqueuePending(ctx context.Context, driveID string, w *preview.Worker) {
@@ -1100,6 +1104,126 @@ func removeLocalVideoAssets(localDir string, v *catalog.Video) error {
 		}
 	}
 	return nil
+}
+
+type duplicateAssetCleanupStats struct {
+	Candidates       int
+	VideosUpdated    int
+	PreviewFiles     int
+	ThumbnailFiles   int
+	MissingFiles     int
+	SkippedUnsafeRef int
+}
+
+func (a *App) cleanupDuplicateVideoAssets(ctx context.Context) error {
+	if a == nil || a.cat == nil {
+		return nil
+	}
+	localDir := ""
+	if a.cfg != nil {
+		localDir = a.cfg.Storage.LocalPreviewDir
+	}
+	if strings.TrimSpace(localDir) == "" {
+		return nil
+	}
+	items, err := a.cat.ListDuplicateAssetCleanupCandidates(ctx, 0)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		log.Printf("[dedupe-cleanup] no duplicate local assets to clean")
+		return nil
+	}
+
+	stats := duplicateAssetCleanupStats{Candidates: len(items)}
+	for _, item := range items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		clearPreview, removedPreview, missingPreview, skippedPreview, err := cleanupDuplicatePreviewAsset(localDir, item.PreviewLocal)
+		if err != nil {
+			return fmt.Errorf("cleanup duplicate preview video=%s canonical=%s: %w", item.VideoID, item.CanonicalID, err)
+		}
+		clearThumb, removedThumb, missingThumb, err := cleanupDuplicateThumbnailAsset(localDir, item.VideoID, item.ThumbnailURL)
+		if err != nil {
+			return fmt.Errorf("cleanup duplicate thumbnail video=%s canonical=%s: %w", item.VideoID, item.CanonicalID, err)
+		}
+		if skippedPreview {
+			stats.SkippedUnsafeRef++
+		}
+		if removedPreview {
+			stats.PreviewFiles++
+		}
+		if removedThumb {
+			stats.ThumbnailFiles++
+		}
+		if missingPreview {
+			stats.MissingFiles++
+		}
+		if missingThumb {
+			stats.MissingFiles++
+		}
+		if !clearPreview && !clearThumb {
+			continue
+		}
+		if err := a.cat.ClearGeneratedAssets(ctx, item.VideoID, clearPreview, clearThumb); err != nil {
+			return fmt.Errorf("mark duplicate assets cleaned video=%s canonical=%s: %w", item.VideoID, item.CanonicalID, err)
+		}
+		stats.VideosUpdated++
+	}
+	log.Printf("[dedupe-cleanup] candidates=%d updated=%d preview_files=%d thumbnail_files=%d missing=%d skipped_unsafe_refs=%d",
+		stats.Candidates, stats.VideosUpdated, stats.PreviewFiles, stats.ThumbnailFiles, stats.MissingFiles, stats.SkippedUnsafeRef)
+	return nil
+}
+
+func cleanupDuplicatePreviewAsset(localDir, previewLocal string) (clear bool, removed bool, missing bool, skippedUnsafe bool, err error) {
+	clean, ok := localPathWithin(localDir, previewLocal)
+	if !ok {
+		if strings.TrimSpace(previewLocal) != "" {
+			return false, false, false, true, nil
+		}
+		return false, false, false, false, nil
+	}
+	removed, missing, err = removeRegularFileIfExists(clean)
+	if err != nil {
+		return false, false, false, false, err
+	}
+	return true, removed, missing, false, nil
+}
+
+func cleanupDuplicateThumbnailAsset(localDir, videoID, thumbnailURL string) (clear bool, removed bool, missing bool, err error) {
+	if thumbnailURL != "/p/thumb/"+videoID {
+		return false, false, false, nil
+	}
+	clean, ok := localPathWithin(localDir, filepath.Join(localDir, "thumbs", videoID+".jpg"))
+	if !ok {
+		return false, false, false, nil
+	}
+	removed, missing, err = removeRegularFileIfExists(clean)
+	if err != nil {
+		return false, false, false, err
+	}
+	return true, removed, missing, nil
+}
+
+func removeRegularFileIfExists(path string) (removed bool, missing bool, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+	return true, false, nil
 }
 
 func localPathWithin(root, path string) (string, bool) {

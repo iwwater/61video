@@ -929,6 +929,7 @@ func ffmpegOutputLooksRateLimited(output []byte) bool {
 		return false
 	}
 	return strings.Contains(text, "too many requests") ||
+		strings.Contains(text, "throttl") ||
 		strings.Contains(text, "rate limit") ||
 		strings.Contains(text, "rate-limit") ||
 		strings.Contains(text, "server returned 429")

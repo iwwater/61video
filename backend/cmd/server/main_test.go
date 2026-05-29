@@ -13,6 +13,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/preview"
 )
 
@@ -151,6 +152,72 @@ func TestRegisterPreviewWorkersGenerateThumbnailsBeforePreviews(t *testing.T) {
 	}
 
 	t.Fatalf("generation did not finish, events=%#v", gen.Events())
+}
+
+func TestRegisterPreviewWorkersBackfillsHistoricalFingerprints(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	dataPath := filepath.Join(t.TempDir(), "video.mp4")
+	data := []byte("historical video content for fingerprint")
+	if err := os.WriteFile(dataPath, data, 0o644); err != nil {
+		t.Fatalf("write video data: %v", err)
+	}
+
+	now := time.Now()
+	video := &catalog.Video{
+		ID:                "historical-video",
+		DriveID:           "drive-id",
+		FileID:            "file-id",
+		Title:             "Historical",
+		Size:              int64(len(data)),
+		FingerprintStatus: "pending",
+		PublishedAt:       now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := cat.UpsertVideo(ctx, video); err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+
+	app := &App{
+		cat:                cat,
+		workers:            make(map[string]*preview.Worker),
+		thumbWorkers:       make(map[string]*preview.ThumbWorker),
+		fingerprintWorkers: make(map[string]*fingerprint.Worker),
+	}
+	drv := &serverFingerprintFakeDrive{path: dataPath}
+	fingerprintWorker := fingerprint.NewWorker(cat, drv, fingerprint.Config{})
+	go fingerprintWorker.Run(ctx)
+
+	app.registerPreviewWorkers(ctx, "drive-id", nil, nil, fingerprintWorker, func() {})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := cat.GetVideo(ctx, video.ID)
+		if err != nil {
+			t.Fatalf("get video: %v", err)
+		}
+		if got.SampledSHA256 != "" && got.FingerprintStatus == "ready" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, err := cat.GetVideo(ctx, video.ID)
+	if err != nil {
+		t.Fatalf("get video after timeout: %v", err)
+	}
+	t.Fatalf("fingerprint status=%q sampled=%q, want ready with hash", got.FingerprintStatus, got.SampledSHA256)
 }
 
 func TestFailedThumbnailsDoNotBlockPreviewGeneration(t *testing.T) {
@@ -480,6 +547,106 @@ func TestCleanupMissingPikPakVideosRemovesDatabaseRowsAndLocalAssets(t *testing.
 	}
 }
 
+func TestCleanupDuplicateVideoAssetsRemovesOnlyDuplicateLocalAssets(t *testing.T) {
+	ctx := context.Background()
+	localDir := t.TempDir()
+	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	canonicalPreview := filepath.Join(localDir, "canonical.mp4")
+	duplicatePreview := filepath.Join(localDir, "duplicate.mp4")
+	canonicalThumb := filepath.Join(localDir, "thumbs", "canonical-video.jpg")
+	duplicateThumb := filepath.Join(localDir, "thumbs", "duplicate-video.jpg")
+	for _, path := range []string{canonicalPreview, duplicatePreview, canonicalThumb, duplicateThumb} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte("asset"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	for _, v := range []*catalog.Video{
+		{
+			ID:            "canonical-video",
+			DriveID:       "115",
+			FileID:        "file-a",
+			Title:         "Canonical",
+			Size:          2048,
+			ThumbnailURL:  "/p/thumb/canonical-video",
+			PreviewLocal:  canonicalPreview,
+			PreviewStatus: "ready",
+			PublishedAt:   now,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:            "duplicate-video",
+			DriveID:       "onedrive",
+			FileID:        "file-b",
+			Title:         "Duplicate",
+			Size:          2048,
+			ThumbnailURL:  "/p/thumb/duplicate-video",
+			PreviewLocal:  duplicatePreview,
+			PreviewStatus: "ready",
+			PublishedAt:   now.Add(time.Second),
+			CreatedAt:     now.Add(time.Second),
+			UpdatedAt:     now.Add(time.Second),
+		},
+	} {
+		if err := cat.UpsertVideo(ctx, v); err != nil {
+			t.Fatalf("seed %s: %v", v.ID, err)
+		}
+		if err := cat.UpdateVideoFingerprint(ctx, v.ID, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ready", ""); err != nil {
+			t.Fatalf("fingerprint %s: %v", v.ID, err)
+		}
+	}
+
+	app := &App{
+		cfg: &config.Config{Storage: config.Storage{LocalPreviewDir: localDir}},
+		cat: cat,
+	}
+	if err := app.cleanupDuplicateVideoAssets(ctx); err != nil {
+		t.Fatalf("cleanup duplicate video assets: %v", err)
+	}
+
+	for _, path := range []string{canonicalPreview, canonicalThumb} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("canonical asset %s missing: %v", path, err)
+		}
+	}
+	for _, path := range []string{duplicatePreview, duplicateThumb} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("duplicate asset %s still exists, stat err=%v", path, err)
+		}
+	}
+	dup, err := cat.GetVideo(ctx, "duplicate-video")
+	if err != nil {
+		t.Fatalf("get duplicate: %v", err)
+	}
+	if dup.PreviewLocal != "" || dup.PreviewStatus != "pending" {
+		t.Fatalf("duplicate preview local=%q status=%q, want empty pending", dup.PreviewLocal, dup.PreviewStatus)
+	}
+	if dup.ThumbnailURL != "" {
+		t.Fatalf("duplicate thumbnail url = %q, want empty", dup.ThumbnailURL)
+	}
+	canon, err := cat.GetVideo(ctx, "canonical-video")
+	if err != nil {
+		t.Fatalf("get canonical: %v", err)
+	}
+	if canon.PreviewLocal != canonicalPreview || canon.ThumbnailURL != "/p/thumb/canonical-video" {
+		t.Fatalf("canonical changed: preview=%q thumb=%q", canon.PreviewLocal, canon.ThumbnailURL)
+	}
+}
+
 type serverFakeTeaserGenerator struct {
 	mu     sync.Mutex
 	events []string
@@ -543,6 +710,15 @@ func (d *serverFakeDrive) EnsureDir(context.Context, string) (string, error) {
 	return "", drives.ErrNotSupported
 }
 func (d *serverFakeDrive) RootID() string { return "root" }
+
+type serverFingerprintFakeDrive struct {
+	serverFakeDrive
+	path string
+}
+
+func (d *serverFingerprintFakeDrive) StreamURL(context.Context, string) (*drives.StreamLink, error) {
+	return &drives.StreamLink{URL: d.path}, nil
+}
 
 type serverLocalUploadFakeDrive struct {
 	serverFakeDrive

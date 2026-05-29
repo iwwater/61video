@@ -199,7 +199,7 @@ func TestGraph429ReturnsRateLimitErrorWithRetryAfter(t *testing.T) {
 		APIBaseURL:   srv.URL,
 	})
 
-	_, err := d.List(context.Background(), "root")
+	_, err := d.StreamURL(context.Background(), "file-id")
 	if err == nil {
 		t.Fatal("list succeeded, want rate limit error")
 	}
@@ -209,6 +209,92 @@ func TestGraph429ReturnsRateLimitErrorWithRetryAfter(t *testing.T) {
 	}
 	if rateLimit.RetryAfter != 2*time.Minute {
 		t.Fatalf("retry after = %v, want 2m", rateLimit.RetryAfter)
+	}
+}
+
+func TestGraphThrottleMessageReturnsRateLimitError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"code":    "generalException",
+				"message": "The request has been throttled. Please try again later.",
+			},
+		}); err != nil {
+			t.Fatalf("write json: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	d := New(Config{
+		ID:           "od-main",
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+		APIBaseURL:   srv.URL,
+	})
+
+	_, err := d.StreamURL(context.Background(), "file-id")
+	if err == nil {
+		t.Fatal("list succeeded, want rate limit error")
+	}
+	var rateLimit *drives.RateLimitError
+	if !errors.As(err, &rateLimit) {
+		t.Fatalf("error = %T %[1]v, want RateLimitError", err)
+	}
+}
+
+func TestListCoolsDownAndRetriesOneDriveRateLimit(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1.0/me/drive/items/root/children" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		calls++
+		if calls == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"code":    "TooManyRequests",
+					"message": "throttled",
+				},
+			}); err != nil {
+				t.Fatalf("write json: %v", err)
+			}
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"value": []map[string]any{
+				{
+					"id":   "file-id",
+					"name": "demo.mp4",
+					"size": 100,
+					"file": map[string]any{"mimeType": "video/mp4"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	d := New(Config{
+		ID:           "od-main",
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+		APIBaseURL:   srv.URL,
+	})
+	d.listInterval = 0
+	d.listCooldown = time.Millisecond
+
+	got, err := d.List(context.Background(), "root")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want retry after rate limit", calls)
+	}
+	if len(got) != 1 || got[0].ID != "file-id" {
+		t.Fatalf("entries = %#v, want retried file", got)
 	}
 }
 

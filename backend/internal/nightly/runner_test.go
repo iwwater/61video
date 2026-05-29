@@ -114,6 +114,10 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 			rec.push("migrate")
 			return nil
 		},
+		RunDedupeAssetCleanup: func(context.Context) error {
+			rec.push("dedupe-cleanup")
+			return nil
+		},
 	})
 
 	r.runPipeline(context.Background())
@@ -128,6 +132,7 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 		"crawl:sp-1",
 		"wait-idle", // after phase 2
 		"migrate",
+		"dedupe-cleanup",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("call sequence len = %d, want %d; got=%v", len(got), len(want), got)
@@ -156,6 +161,10 @@ func TestRunPipelineSkipsMigrationWhenNoSpider91(t *testing.T) {
 			rec.push("migrate")
 			return nil
 		},
+		RunDedupeAssetCleanup: func(context.Context) error {
+			rec.push("dedupe-cleanup")
+			return nil
+		},
 	})
 
 	r.runPipeline(context.Background())
@@ -164,6 +173,15 @@ func TestRunPipelineSkipsMigrationWhenNoSpider91(t *testing.T) {
 		if c == "migrate" || c == "crawl:sp-1" {
 			t.Fatalf("phase 2/3 should be skipped when no spider91 drive, got call %q", c)
 		}
+	}
+	foundCleanup := false
+	for _, c := range rec.snapshot() {
+		if c == "dedupe-cleanup" {
+			foundCleanup = true
+		}
+	}
+	if !foundCleanup {
+		t.Fatalf("dedupe cleanup should still run when spider91 is absent; calls=%v", rec.snapshot())
 	}
 }
 
@@ -186,6 +204,7 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 		RunSpider91Crawl:      func(context.Context, string) { rec.push("crawl") },
 		WaitPreviewQueuesIdle: func(context.Context) error { rec.push("wait-idle"); return nil },
 		RunMigration:          func(context.Context) error { rec.push("migrate"); return nil },
+		RunDedupeAssetCleanup: func(context.Context) error { rec.push("dedupe-cleanup"); return nil },
 	})
 
 	r.runPipeline(ctx)
@@ -199,6 +218,9 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 	for _, c := range got {
 		if c == "crawl" || c == "migrate" {
 			t.Fatalf("subsequent phase should not run after cancel, got call %q", c)
+		}
+		if c == "dedupe-cleanup" {
+			t.Fatalf("dedupe cleanup should not run after cancel, got call %q", c)
 		}
 	}
 }

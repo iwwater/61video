@@ -503,6 +503,9 @@ func (c *Catalog) ListVideosByThumbnailStatus(ctx context.Context, driveID, stat
 
 // ListVideosNeedingThumbnail returns videos that still need a thumbnail attempt.
 // Failed thumbnails are reported separately and should not block teaser generation.
+// Videos whose local assets were cleared because they are fingerprint duplicates
+// stay pending in the DB, but uniqueVideoWhereSQL keeps them out of this queue
+// while their canonical sibling still exists.
 func (c *Catalog) ListVideosNeedingThumbnail(ctx context.Context, driveID string, limit int) ([]*Video, error) {
 	if limit <= 0 {
 		limit = 10000
@@ -511,7 +514,7 @@ func (c *Catalog) ListVideosNeedingThumbnail(ctx context.Context, driveID string
 		`SELECT `+allVideoCols+` FROM videos
 		 WHERE drive_id = ?
 		   AND COALESCE(thumbnail_url, '') = ''
-		   AND COALESCE(thumbnail_status, 'pending') != 'failed'
+		   AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped')
 		   AND COALESCE(hidden, 0) = 0
 		   AND `+uniqueVideoWhereSQL+`
 		 ORDER BY created_at ASC
@@ -538,7 +541,7 @@ func (c *Catalog) CountVideosNeedingThumbnail(ctx context.Context, driveID strin
 		`SELECT COUNT(*) FROM videos
 		 WHERE drive_id = ?
 		   AND COALESCE(thumbnail_url, '') = ''
-		   AND COALESCE(thumbnail_status, 'pending') != 'failed'
+		   AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped')
 		   AND COALESCE(hidden, 0) = 0
 		   AND `+uniqueVideoWhereSQL,
 		driveID).Scan(&count)
@@ -1010,6 +1013,124 @@ func (c *Catalog) ListLocalMediaRefs(ctx context.Context) ([]LocalMediaRef, erro
 		return nil, err
 	}
 	return out, nil
+}
+
+// DuplicateAssetCleanupCandidate points at a non-canonical video in a
+// size+sampled_sha256 duplicate group that still owns generated local assets.
+// The cleanup job uses this to remove duplicate thumbnails/teasers without
+// touching the original cloud file or deleting the catalog row.
+type DuplicateAssetCleanupCandidate struct {
+	VideoID       string
+	DriveID       string
+	Title         string
+	PreviewLocal  string
+	ThumbnailURL  string
+	CanonicalID   string
+	SampledSHA256 string
+	Size          int64
+}
+
+// ListDuplicateAssetCleanupCandidates returns duplicate videos whose own local
+// generated assets can be cleared. A group canonical is the same representative
+// used by uniqueVideoWhereSQL: earliest created_at, then lexicographically
+// smallest id.
+func (c *Catalog) ListDuplicateAssetCleanupCandidates(ctx context.Context, limit int) ([]DuplicateAssetCleanupCandidate, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	rows, err := c.db.QueryContext(ctx, `
+WITH canonical AS (
+	SELECT v.id, v.size_bytes, v.sampled_sha256
+	  FROM videos v
+	 WHERE v.size_bytes > 0
+	   AND COALESCE(v.sampled_sha256, '') != ''
+	   AND NOT EXISTS (
+		 SELECT 1
+		   FROM videos earlier
+		  WHERE earlier.size_bytes = v.size_bytes
+		    AND earlier.sampled_sha256 = v.sampled_sha256
+		    AND COALESCE(earlier.sampled_sha256, '') != ''
+		    AND earlier.size_bytes > 0
+		    AND (
+			  earlier.created_at < v.created_at
+			  OR (earlier.created_at = v.created_at AND earlier.id < v.id)
+		    )
+	   )
+)
+SELECT dup.id,
+       dup.drive_id,
+       dup.title,
+       COALESCE(dup.preview_local, ''),
+       COALESCE(dup.thumbnail_url, ''),
+       canonical.id,
+       dup.sampled_sha256,
+       dup.size_bytes
+  FROM videos dup
+  JOIN canonical
+    ON canonical.size_bytes = dup.size_bytes
+   AND canonical.sampled_sha256 = dup.sampled_sha256
+ WHERE dup.id != canonical.id
+   AND dup.size_bytes > 0
+   AND COALESCE(dup.sampled_sha256, '') != ''
+   AND (
+	 COALESCE(dup.preview_local, '') != ''
+	 OR COALESCE(dup.thumbnail_url, '') = '/p/thumb/' || dup.id
+   )
+ ORDER BY dup.created_at ASC, dup.id ASC
+ LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DuplicateAssetCleanupCandidate
+	for rows.Next() {
+		var item DuplicateAssetCleanupCandidate
+		if err := rows.Scan(
+			&item.VideoID,
+			&item.DriveID,
+			&item.Title,
+			&item.PreviewLocal,
+			&item.ThumbnailURL,
+			&item.CanonicalID,
+			&item.SampledSHA256,
+			&item.Size,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ClearGeneratedAssets clears DB references to generated local assets for a
+// video. The statuses go back to pending so the video can regenerate assets if
+// it later becomes the canonical item after its older duplicate is removed.
+func (c *Catalog) ClearGeneratedAssets(ctx context.Context, videoID string, clearPreview, clearThumbnail bool) error {
+	parts := []string{}
+	args := []any{}
+	if clearPreview {
+		parts = append(parts, "preview_file_id = ''", "preview_local = ''", "preview_status = 'pending'")
+	}
+	if clearThumbnail {
+		parts = append(parts, "thumbnail_url = ''", "thumbnail_status = 'pending'")
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	parts = append(parts, "updated_at = ?")
+	args = append(args, time.Now().UnixMilli(), videoID)
+	res, err := c.db.ExecContext(ctx, `UPDATE videos SET `+strings.Join(parts, ", ")+` WHERE id = ?`, args...)
+	if err != nil {
+		return err
+	}
+	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // ---------- Drive ----------
