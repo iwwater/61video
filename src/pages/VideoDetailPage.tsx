@@ -131,8 +131,10 @@ export default function VideoDetailPage() {
               <div className="vd-player-wrap">
                 <div className="vd-player">
                   <VideoPlayer
+                    id={detail.id}
                     src={detail.videoSrc}
                     poster={detail.poster}
+                    previewSrc={detail.previewSrc}
                     title={detail.title}
                     onFirstPlay={handleFirstPlay}
                   />

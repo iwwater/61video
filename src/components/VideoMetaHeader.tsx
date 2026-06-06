@@ -10,11 +10,10 @@ type Props = {
  *
  * 视觉：
  * - 标题：大、粗、最高两行
- * - meta：作者首字头像 + 名字 + 一组小胶囊（来源、画质、时长、观看数、发布时间）
+ * - meta：一组小胶囊（来源、画质、时长、观看数、发布时间）
  *   每个胶囊有自己的语义色彩，避免传统 "·" 分隔列表的列表感。
  */
 export function VideoMetaHeader({ video }: Props) {
-  const author = (video.author ?? "").trim();
   const source = (video.sourceLabel ?? "").trim();
   const quality = (video.quality ?? "").trim();
   const duration = (video.duration ?? "").trim();
@@ -28,15 +27,6 @@ export function VideoMetaHeader({ video }: Props) {
       </h1>
 
       <div className="vd-header__row">
-        {author && (
-          <div className="vd-author" aria-label={`作者 ${author}`}>
-            <span className="vd-author__avatar" aria-hidden="true">
-              {author.slice(0, 1)}
-            </span>
-            <span className="vd-author__name">{author}</span>
-          </div>
-        )}
-
         <ul className="vd-meta" aria-label="视频信息">
           {source && (
             <li className="vd-meta__chip" data-tone={sourceKind || "neutral"}>
