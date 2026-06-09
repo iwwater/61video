@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/spider91"
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/preview"
@@ -606,7 +608,8 @@ func TestNightlyTargetsComeFromCatalogBeforeDriveAttach(t *testing.T) {
 	for _, d := range []*catalog.Drive{
 		{ID: "115", Kind: "p115", Name: "115", RootID: "0", TeaserEnabled: true},
 		{ID: "pikpak", Kind: "pikpak", Name: "PikPak", RootID: "0", TeaserEnabled: true},
-		{ID: "91-spider", Kind: "spider91", Name: "91 Spider", RootID: "0", TeaserEnabled: true},
+		{ID: "91-legacy", Kind: "spider91", Name: "91 Legacy", RootID: "0", TeaserEnabled: true},
+		{ID: "91-crawler", Kind: scriptcrawler.Kind, Name: "91 Spider", RootID: "/", TeaserEnabled: true},
 	} {
 		if err := cat.UpsertDrive(ctx, d); err != nil {
 			t.Fatalf("seed drive %s: %v", d.ID, err)
@@ -619,8 +622,47 @@ func TestNightlyTargetsComeFromCatalogBeforeDriveAttach(t *testing.T) {
 		t.Fatalf("scan target ids = %#v, want 115 and pikpak from catalog", scanIDs)
 	}
 	spiderIDs := app.listSpider91DriveIDs(ctx)
-	if len(spiderIDs) != 1 || spiderIDs[0] != "91-spider" {
-		t.Fatalf("spider91 ids = %#v, want catalog spider drive", spiderIDs)
+	if len(spiderIDs) != 1 || spiderIDs[0] != "91-crawler" {
+		t.Fatalf("spider91 ids = %#v, want crawler-page script drive", spiderIDs)
+	}
+}
+
+func TestAttachDriveRejectsLegacySpider91Storage(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+	d := &catalog.Drive{
+		ID:            "91-legacy",
+		Kind:          spider91.Kind,
+		Name:          "91 Legacy",
+		RootID:        "/",
+		TeaserEnabled: true,
+	}
+	if err := cat.UpsertDrive(ctx, d); err != nil {
+		t.Fatalf("seed drive: %v", err)
+	}
+
+	app := &App{cat: cat, registry: proxy.NewRegistry()}
+	err = app.attachDrive(ctx, d)
+	if err == nil || !strings.Contains(err.Error(), "爬虫管理") {
+		t.Fatalf("attach err = %v, want crawler management guidance", err)
+	}
+	if _, ok := app.registry.Get(d.ID); ok {
+		t.Fatal("legacy spider91 drive should not be registered")
+	}
+	got, err := cat.GetDrive(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("get drive: %v", err)
+	}
+	if got.Status != "error" || !strings.Contains(got.LastError, "爬虫管理") {
+		t.Fatalf("status/error = %q/%q, want deprecated error", got.Status, got.LastError)
 	}
 }
 
@@ -1033,7 +1075,6 @@ func TestCleanupDriveVideosForDeleteRemovesRowsAndGeneratedAssetsOnly(t *testing
 		workers:            make(map[string]*preview.Worker),
 		thumbWorkers:       make(map[string]*preview.ThumbWorker),
 		fingerprintWorkers: make(map[string]*fingerprint.Worker),
-		spider91Crawlers:   make(map[string]*spider91.Crawler),
 	}
 	removed, err := app.cleanupDriveVideosForDelete(ctx, "local-main")
 	if err != nil {
@@ -1313,7 +1354,6 @@ func TestCleanupDriveVideosForDeleteSpider91RemovesCrawledDirAndOriginRecords(t 
 		workers:            make(map[string]*preview.Worker),
 		thumbWorkers:       make(map[string]*preview.ThumbWorker),
 		fingerprintWorkers: make(map[string]*fingerprint.Worker),
-		spider91Crawlers:   make(map[string]*spider91.Crawler),
 	}
 	removed, err := app.cleanupDriveVideosForDelete(ctx, driveID)
 	if err != nil {

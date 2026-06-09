@@ -17,6 +17,7 @@ import (
 	"github.com/video-site/backend/internal/drives/googledrive"
 	"github.com/video-site/backend/internal/drives/p123"
 	"github.com/video-site/backend/internal/drives/pikpak"
+	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/spider91"
 )
 
@@ -596,6 +597,88 @@ func TestCleanupRemovesAllAlreadyMigratedOrphans(t *testing.T) {
 		if !p.migrated && !exists {
 			t.Errorf("%s not migrated → should be retained", p.viewkey)
 		}
+	}
+}
+
+func TestRunOnceMigratesBuiltInSpider91ScriptCrawlerSource(t *testing.T) {
+	ctx := context.Background()
+	cat := setupCatalog(t)
+	src := scriptcrawler.New(scriptcrawler.Config{ID: "spider-script", RootDir: t.TempDir()})
+	if err := src.Init(ctx); err != nil {
+		t.Fatalf("scriptcrawler init: %v", err)
+	}
+	if err := cat.UpsertDrive(ctx, &catalog.Drive{
+		ID:          src.ID(),
+		Kind:        scriptcrawler.Kind,
+		Name:        "Built-in Spider91",
+		Credentials: map[string]string{"builtin": "spider91"},
+	}); err != nil {
+		t.Fatalf("upsert source drive: %v", err)
+	}
+	pp := newFakePikPak("pikpak-target", "pikpak-root-id")
+	reg := newFakeRegistry()
+	reg.Add(src)
+	reg.Add(pp)
+
+	fileID := "vk-script.mp4"
+	videoPath, err := src.VideoPath(fileID)
+	if err != nil {
+		t.Fatalf("video path: %v", err)
+	}
+	if err := os.WriteFile(videoPath, []byte("scriptcrawler spider91 video"), 0o644); err != nil {
+		t.Fatalf("write video: %v", err)
+	}
+	thumbPath, err := src.ThumbPath("vk-script.jpg")
+	if err != nil {
+		t.Fatalf("thumb path: %v", err)
+	}
+	if err := os.WriteFile(thumbPath, []byte("thumb"), 0o644); err != nil {
+		t.Fatalf("write thumb: %v", err)
+	}
+	now := time.Now()
+	id := "spider91-" + src.ID() + "-vk-script"
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:            id,
+		DriveID:       src.ID(),
+		FileID:        fileID,
+		FileName:      fileID,
+		Title:         "Scriptcrawler Spider91",
+		Author:        "91porn",
+		Ext:           "mp4",
+		Quality:       "HD",
+		Size:          int64(len("scriptcrawler spider91 video")),
+		PreviewStatus: "pending",
+		PublishedAt:   now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("upsert video: %v", err)
+	}
+
+	m := New(Config{
+		Catalog:          cat,
+		Registry:         reg,
+		GetTargetDriveID: func() string { return pp.ID() },
+		KeepLatestN:      -1,
+		CommonThumbDir:   t.TempDir(),
+	})
+	m.runOnce(ctx)
+
+	if pp.uploadCalls != 1 {
+		t.Fatalf("upload calls = %d, want 1", pp.uploadCalls)
+	}
+	got, err := cat.GetVideo(ctx, id)
+	if err != nil {
+		t.Fatalf("get migrated video: %v", err)
+	}
+	if got.DriveID != pp.ID() {
+		t.Fatalf("drive_id = %q, want %q", got.DriveID, pp.ID())
+	}
+	if _, err := os.Stat(videoPath); !os.IsNotExist(err) {
+		t.Fatalf("local video stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(thumbPath); !os.IsNotExist(err) {
+		t.Fatalf("local thumb stat err = %v, want not exist", err)
 	}
 }
 

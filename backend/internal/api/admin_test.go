@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -672,7 +673,7 @@ func TestHandleUpsertGoogleDriveMergesOAuthCredentials(t *testing.T) {
 	}
 }
 
-func TestHandleUpsertSpider91ProxyPreservesRuntimeCredentials(t *testing.T) {
+func TestHandleUpsertSpider91DriveIsRejected(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {
@@ -708,75 +709,25 @@ func TestHandleUpsertSpider91ProxyPreservesRuntimeCredentials(t *testing.T) {
 	}`))
 	rr := httptest.NewRecorder()
 	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "爬虫管理") {
+		t.Fatalf("body = %q, want crawler management guidance", rr.Body.String())
 	}
 
 	got, err := cat.GetDrive(ctx, "spider91-main")
 	if err != nil {
 		t.Fatalf("get drive: %v", err)
 	}
-	if got.Credentials["proxy"] != "socks5h://proxy-user:proxy-pass@127.0.0.1:7891" {
-		t.Fatalf("proxy = %q, want trimmed new proxy", got.Credentials["proxy"])
+	if got.Credentials["proxy"] != "http://old-proxy.local:7890" {
+		t.Fatalf("proxy = %q, want unchanged old proxy", got.Credentials["proxy"])
 	}
 	if got.Credentials["last_crawl_at"] != "1800000000" {
 		t.Fatalf("last_crawl_at = %q, want preserved", got.Credentials["last_crawl_at"])
 	}
 	if got.Credentials["script_path"] == "" {
 		t.Fatalf("script_path should be preserved")
-	}
-
-	req = httptest.NewRequest(http.MethodPost, "/admin/api/drives", strings.NewReader(`{
-		"id": "spider91-main",
-		"kind": "spider91",
-		"name": "91 Spider",
-		"rootId": "/",
-		"credentials": {"proxy": " "}
-	}`))
-	rr = httptest.NewRecorder()
-	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("clear status = %d, body = %s", rr.Code, rr.Body.String())
-	}
-
-	got, err = cat.GetDrive(ctx, "spider91-main")
-	if err != nil {
-		t.Fatalf("get cleared drive: %v", err)
-	}
-	if _, ok := got.Credentials["proxy"]; ok {
-		t.Fatalf("proxy should be removed after empty save, got %q", got.Credentials["proxy"])
-	}
-	if got.Credentials["last_crawl_at"] != "1800000000" {
-		t.Fatalf("last_crawl_at after clear = %q, want preserved", got.Credentials["last_crawl_at"])
-	}
-}
-
-func TestHandleUpsertSpider91RejectsUnsupportedProxyScheme(t *testing.T) {
-	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
-	if err != nil {
-		t.Fatalf("open catalog: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := cat.Close(); err != nil {
-			t.Fatalf("close catalog: %v", err)
-		}
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives", strings.NewReader(`{
-		"id": "spider91-main",
-		"kind": "spider91",
-		"name": "91 Spider",
-		"rootId": "/",
-		"credentials": {"proxy": "ftp://127.0.0.1:21"}
-	}`))
-	rr := httptest.NewRecorder()
-	(&AdminServer{Catalog: cat}).handleUpsertDrive(rr, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body = %s", rr.Code, rr.Body.String())
-	}
-	if !strings.Contains(rr.Body.String(), "socks5:// 或 socks5h://") {
-		t.Fatalf("body = %q, want supported schemes message", rr.Body.String())
 	}
 }
 
@@ -890,7 +841,7 @@ func TestHandleDeleteDriveRequiresCleanupConfirmation(t *testing.T) {
 	}
 }
 
-func TestHandleListDrivesIncludesSpider91Proxy(t *testing.T) {
+func TestHandleListCrawlersOnlyIncludesCrawlerPageScripts(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {
@@ -911,6 +862,20 @@ func TestHandleListDrivesIncludesSpider91Proxy(t *testing.T) {
 			Credentials: map[string]string{
 				"last_crawl_at": "1800000000",
 				"proxy":         " http://127.0.0.1:7890 ",
+				"script_path":   "/opt/video-site-91/91VideoSpider/spider_91porn.py",
+			},
+			Status: "ok",
+		},
+		{
+			ID:     "crawler-spider91",
+			Kind:   "scriptcrawler",
+			Name:   "91 Spider",
+			RootID: "/",
+			Credentials: map[string]string{
+				"builtin":       "spider91",
+				"last_crawl_at": "1800000000",
+				"proxy":         " http://127.0.0.1:7890 ",
+				"script_path":   "/opt/video-site-91/91VideoSpider/spider_91porn.py",
 			},
 			Status: "ok",
 		},
@@ -930,39 +895,251 @@ func TestHandleListDrivesIncludesSpider91Proxy(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/drives", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/crawlers", nil)
 	rr := httptest.NewRecorder()
-	(&AdminServer{Catalog: cat}).handleListDrives(rr, req)
+	srv := &AdminServer{Catalog: cat}
+	srv.handleListCrawlers(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
 
 	var got []struct {
-		ID            string `json:"id"`
-		Spider91Proxy string `json:"spider91Proxy"`
-		LastCrawlAt   int64  `json:"lastCrawlAt"`
+		ID          string `json:"id"`
+		Kind        string `json:"kind"`
+		Builtin     string `json:"builtin"`
+		Proxy       string `json:"proxy"`
+		LastCrawlAt int64  `json:"lastCrawlAt"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	byID := map[string]struct {
-		Spider91Proxy string
-		LastCrawlAt   int64
+		Kind        string
+		Builtin     string
+		Proxy       string
+		LastCrawlAt int64
 	}{}
 	for _, d := range got {
 		byID[d.ID] = struct {
-			Spider91Proxy string
-			LastCrawlAt   int64
-		}{Spider91Proxy: d.Spider91Proxy, LastCrawlAt: d.LastCrawlAt}
+			Kind        string
+			Builtin     string
+			Proxy       string
+			LastCrawlAt int64
+		}{Kind: d.Kind, Builtin: d.Builtin, Proxy: d.Proxy, LastCrawlAt: d.LastCrawlAt}
 	}
-	if byID["spider91-main"].Spider91Proxy != "http://127.0.0.1:7890" {
-		t.Fatalf("spider91 proxy = %q, want trimmed proxy", byID["spider91-main"].Spider91Proxy)
+	if _, ok := byID["spider91-main"]; ok {
+		t.Fatal("legacy spider91 drive should not be returned by crawler list")
 	}
-	if byID["spider91-main"].LastCrawlAt != 1800000000 {
-		t.Fatalf("lastCrawlAt = %d, want 1800000000", byID["spider91-main"].LastCrawlAt)
+	if byID["crawler-spider91"].Kind != "scriptcrawler" || byID["crawler-spider91"].Builtin != "spider91" {
+		t.Fatalf("crawler kind/builtin = %q/%q, want scriptcrawler/spider91", byID["crawler-spider91"].Kind, byID["crawler-spider91"].Builtin)
 	}
-	if byID["onedrive-main"].Spider91Proxy != "" {
-		t.Fatalf("onedrive spider91Proxy = %q, want empty", byID["onedrive-main"].Spider91Proxy)
+	if byID["crawler-spider91"].Proxy != "http://127.0.0.1:7890" {
+		t.Fatalf("crawler proxy = %q, want trimmed proxy", byID["crawler-spider91"].Proxy)
+	}
+	if byID["crawler-spider91"].LastCrawlAt != 1800000000 {
+		t.Fatalf("lastCrawlAt = %d, want 1800000000", byID["crawler-spider91"].LastCrawlAt)
+	}
+	if _, ok := byID["onedrive-main"]; ok {
+		t.Fatal("onedrive should not be returned by crawler list")
+	}
+
+	driveReq := httptest.NewRequest(http.MethodGet, "/admin/api/drives", nil)
+	driveRR := httptest.NewRecorder()
+	srv.handleListDrives(driveRR, driveReq)
+	if driveRR.Code != http.StatusOK {
+		t.Fatalf("drive status = %d, body = %s", driveRR.Code, driveRR.Body.String())
+	}
+	var drives []struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(driveRR.Body).Decode(&drives); err != nil {
+		t.Fatalf("decode drives: %v", err)
+	}
+	driveIDs := map[string]bool{}
+	for _, d := range drives {
+		driveIDs[d.ID] = true
+	}
+	if !driveIDs["spider91-main"] {
+		t.Fatal("legacy spider91 drive should remain visible in drive list for deletion")
+	}
+	if driveIDs["crawler-spider91"] {
+		t.Fatal("scriptcrawler should not be returned by drive list")
+	}
+}
+
+func TestHandleUpsertCrawlerAllowsBuiltinSpider91WithoutScriptPath(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
+		"id": "spider91-main",
+		"name": "91 Spider",
+		"builtin": "spider91",
+		"scriptPath": "",
+		"pythonPath": "python3",
+		"targetNew": "15"
+	}`))
+	rr := httptest.NewRecorder()
+	(&AdminServer{
+		Catalog: cat,
+		DefaultSpider91ScriptPath: func() string {
+			return ""
+		},
+	}).handleUpsertCrawler(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	got, err := cat.GetDrive(ctx, "spider91-main")
+	if err != nil {
+		t.Fatalf("get crawler drive: %v", err)
+	}
+	if got.Kind != "scriptcrawler" || got.Credentials["builtin"] != "spider91" {
+		t.Fatalf("kind/builtin = %q/%q, want scriptcrawler/spider91", got.Kind, got.Credentials["builtin"])
+	}
+	if got.Credentials["script_path"] != "" {
+		t.Fatalf("script_path = %q, want empty when default is unavailable", got.Credentials["script_path"])
+	}
+}
+
+func TestHandleImportCrawlerScriptFile(t *testing.T) {
+	tmp := t.TempDir()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("file", "../demo crawler.py")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte("print('crawler')\n")); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawlers/import-file", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	(&AdminServer{LocalPreviewDir: filepath.Join(tmp, "previews")}).handleImportCrawlerScriptFile(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		ScriptPath string `json:"scriptPath"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	wantRoot := filepath.Join(tmp, "crawler-scripts")
+	if !strings.HasPrefix(got.ScriptPath, wantRoot+string(os.PathSeparator)) {
+		t.Fatalf("script path = %q, want under %q", got.ScriptPath, wantRoot)
+	}
+	if filepath.Ext(got.ScriptPath) != ".py" {
+		t.Fatalf("script path = %q, want .py", got.ScriptPath)
+	}
+	data, err := os.ReadFile(got.ScriptPath)
+	if err != nil {
+		t.Fatalf("read imported script: %v", err)
+	}
+	if string(data) != "print('crawler')\n" {
+		t.Fatalf("script content = %q", string(data))
+	}
+}
+
+func TestHandleImportCrawlerScriptFileRejectsNonPython(t *testing.T) {
+	tmp := t.TempDir()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("file", "crawler.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte("print('crawler')\n")); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawlers/import-file", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	(&AdminServer{LocalPreviewDir: filepath.Join(tmp, "previews")}).handleImportCrawlerScriptFile(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), ".py") {
+		t.Fatalf("body = %s, want .py error", rr.Body.String())
+	}
+}
+
+func TestHandleImportCrawlerScriptURL(t *testing.T) {
+	tmp := t.TempDir()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/crawler.py" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte("# crawler from url\n"))
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawlers/import-url", strings.NewReader(`{
+		"url": "`+upstream.URL+`/crawler.py"
+	}`))
+	rr := httptest.NewRecorder()
+	(&AdminServer{LocalPreviewDir: filepath.Join(tmp, "previews")}).handleImportCrawlerScriptURL(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		ScriptPath string `json:"scriptPath"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	wantRoot := filepath.Join(tmp, "crawler-scripts")
+	if !strings.HasPrefix(got.ScriptPath, wantRoot+string(os.PathSeparator)) {
+		t.Fatalf("script path = %q, want under %q", got.ScriptPath, wantRoot)
+	}
+	data, err := os.ReadFile(got.ScriptPath)
+	if err != nil {
+		t.Fatalf("read imported script: %v", err)
+	}
+	if string(data) != "# crawler from url\n" {
+		t.Fatalf("script content = %q", string(data))
+	}
+}
+
+func TestHandleImportCrawlerScriptURLRejectsNonPython(t *testing.T) {
+	tmp := t.TempDir()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/crawler.txt" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte("# crawler from url\n"))
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawlers/import-url", strings.NewReader(`{
+		"url": "`+upstream.URL+`/crawler.txt"
+	}`))
+	rr := httptest.NewRecorder()
+	(&AdminServer{LocalPreviewDir: filepath.Join(tmp, "previews")}).handleImportCrawlerScriptURL(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), ".py") {
+		t.Fatalf("body = %s, want .py error", rr.Body.String())
 	}
 }
 

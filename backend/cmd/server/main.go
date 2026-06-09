@@ -33,6 +33,7 @@ import (
 	"github.com/video-site/backend/internal/drives/p123"
 	"github.com/video-site/backend/internal/drives/pikpak"
 	"github.com/video-site/backend/internal/drives/quark"
+	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/spider91"
 	"github.com/video-site/backend/internal/drives/wopan"
 	"github.com/video-site/backend/internal/fingerprint"
@@ -45,6 +46,7 @@ import (
 )
 
 const fingerprintReconcileInterval = time.Minute
+const legacySpider91DriveUnsupported = "91Spider 已不再支持作为网盘配置，请在爬虫管理页面添加爬虫脚本"
 
 func main() {
 	cfgPath := "./config.yaml"
@@ -76,7 +78,7 @@ func main() {
 		workers:            make(map[string]*preview.Worker),
 		thumbWorkers:       make(map[string]*preview.ThumbWorker),
 		fingerprintWorkers: make(map[string]*fingerprint.Worker),
-		spider91Crawlers:   make(map[string]*spider91.Crawler),
+		scriptCrawlers:     make(map[string]*scriptcrawler.Crawler),
 	}
 	app.proxy = proxy.New(app.registry)
 	app.spider91Migrator = spider91migrate.New(spider91migrate.Config{
@@ -171,12 +173,22 @@ func main() {
 			app.detachDrive(driveID)
 		},
 		OnScanRequested: func(driveID string) bool {
-			// spider91 的"重扫"等同于手动触发一次爬取；其它 drive 走标准 scan
-			app.mu.Lock()
-			_, isSpider91 := app.spider91Crawlers[driveID]
-			app.mu.Unlock()
+			// 爬虫类 drive 的"重扫"等同于手动触发一次爬取；其它 drive 走标准 scan
+			isSpider91 := false
+			isScriptCrawler := false
+			if d, err := app.cat.GetDrive(ctx, driveID); err == nil && d != nil {
+				if d.Kind == spider91.Kind {
+					log.Printf("[spider91] drive=%s is a deprecated storage crawler, ignore scan request", driveID)
+					return false
+				}
+				isSpider91 = scriptCrawlerSourceKindForDrive(d) == spider91.Kind
+				isScriptCrawler = d.Kind == scriptcrawler.Kind
+			}
 			if isSpider91 {
 				return app.scheduleSpider91Crawl(ctx, driveID)
+			}
+			if isScriptCrawler {
+				return app.scheduleScriptCrawlerCrawl(ctx, driveID)
 			}
 			return app.scheduleScan(ctx, driveID)
 		},
@@ -226,6 +238,9 @@ func main() {
 		GetSpider91UploadDriveID: func() string { return app.Spider91UploadDriveID() },
 		SetSpider91UploadDriveID: func(id string) error {
 			return app.SetSpider91UploadDriveID(ctx, id)
+		},
+		DefaultSpider91ScriptPath: func() string {
+			return app.defaultSpider91ScriptPath()
 		},
 		OnRunNightlyJob: func() bool {
 			if app.nightlyRunner != nil {
@@ -304,8 +319,9 @@ type App struct {
 	thumbWorkers       map[string]*preview.ThumbWorker
 	fingerprintWorkers map[string]*fingerprint.Worker
 	cancels            map[string]context.CancelFunc
-	// spider91Crawlers 按 driveID 索引，每个 spider91 drive 独立一个 Crawler
-	spider91Crawlers map[string]*spider91.Crawler
+	// scriptCrawlers 按 driveID 索引，每个脚本爬虫 drive 独立一个 Crawler。
+	// 内置 Spider91 也走这里，只是 SourceKind=spider91，以兼容历史 video id。
+	scriptCrawlers map[string]*scriptcrawler.Crawler
 
 	// driveAttachMu 串行化云盘挂载/重挂载。挂载会访问上游服务，可能较慢；
 	// 串行化可以避免启动后台挂载和手动扫盘按需挂载同一个 drive 时重复创建 worker。
@@ -737,11 +753,16 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 			ID:       d.ID,
 			RootPath: d.Credentials["path"],
 		})
-	case spider91.Kind:
-		drv = spider91.New(spider91.Config{
+	case scriptcrawler.Kind:
+		drv = scriptcrawler.New(scriptcrawler.Config{
 			ID:      d.ID,
-			RootDir: a.spider91DriveDir(d.ID),
+			RootDir: a.scriptCrawlerDriveDirForDrive(d),
 		})
+	case spider91.Kind:
+		d.Status = "error"
+		d.LastError = legacySpider91DriveUnsupported
+		_ = a.cat.UpsertDrive(ctx, d)
+		return errors.New(legacySpider91DriveUnsupported)
 	default:
 		return fmt.Errorf("unknown drive kind: %s", d.Kind)
 	}
@@ -761,9 +782,8 @@ func (a *App) attachDriveUnlocked(ctx context.Context, d *catalog.Drive) error {
 
 	a.startDriveGenerationWorkers(ctx, d.ID, drv, true)
 
-	// spider91 driver 还需要一个 crawler，挂在专用 map 里供 crawlerLoop 调用
-	if sd, ok := drv.(*spider91.Driver); ok {
-		a.attachSpider91Crawler(d, sd)
+	if sd, ok := drv.(*scriptcrawler.Driver); ok {
+		a.attachScriptCrawler(d, sd)
 	}
 
 	return nil
@@ -836,6 +856,26 @@ func (a *App) spider91DriveDir(driveID string) string {
 	return filepath.Join(a.spider91RootDir(), driveID)
 }
 
+// scriptCrawlerRootDir 是所有通用脚本爬虫 drive 共享的根目录。
+func (a *App) scriptCrawlerRootDir() string {
+	return filepath.Join(filepath.Dir(a.cfg.Storage.LocalPreviewDir), "scriptcrawlers")
+}
+
+// scriptCrawlerDriveDir 是单个 scriptcrawler drive 的存储目录：<root>/<driveID>。
+func (a *App) scriptCrawlerDriveDir(driveID string) string {
+	return filepath.Join(a.scriptCrawlerRootDir(), driveID)
+}
+
+func (a *App) scriptCrawlerDriveDirForDrive(d *catalog.Drive) string {
+	if d != nil && scriptCrawlerSourceKindForDrive(d) == spider91.Kind {
+		return a.spider91DriveDir(d.ID)
+	}
+	if d == nil {
+		return a.scriptCrawlerDriveDir("")
+	}
+	return a.scriptCrawlerDriveDir(d.ID)
+}
+
 // commonThumbsDir 是所有 drive 共享的封面目录，/p/thumb/{videoID} 路由命中这里。
 func (a *App) commonThumbsDir() string {
 	return filepath.Join(a.cfg.Storage.LocalPreviewDir, "thumbs")
@@ -865,77 +905,72 @@ func (a *App) defaultSpider91ScriptPath() string {
 	return ""
 }
 
-// attachSpider91Crawler 创建该 drive 对应的 Crawler 并注册到 a.spider91Crawlers。
-func (a *App) attachSpider91Crawler(d *catalog.Drive, drv *spider91.Driver) {
+// attachScriptCrawler 创建通用脚本爬虫 runner，并注册到 a.scriptCrawlers。
+func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 	pythonPath := strings.TrimSpace(d.Credentials["python_path"])
 	if pythonPath == "" {
 		pythonPath = "python3"
 	}
 	scriptPath := strings.TrimSpace(d.Credentials["script_path"])
-	if scriptPath == "" {
+	sourceKind := scriptCrawlerSourceKindForDrive(d)
+	if scriptPath == "" && sourceKind == spider91.Kind {
 		scriptPath = a.defaultSpider91ScriptPath()
 	}
-	// 91porn CDN 在海外；空缺时回退到 HTTPS_PROXY / HTTP_PROXY 环境变量。
 	proxyURL := strings.TrimSpace(d.Credentials["proxy"])
+	configJSON := strings.TrimSpace(d.Credentials["config_json"])
+	workDir := ""
+	if scriptPath != "" {
+		workDir = filepath.Dir(scriptPath)
+	}
 
 	driveID := d.ID
-	var progressMu sync.Mutex
-	checkedVideos := 0
-	expectedNewVideos := 0
-	updateProgress := func(scanned, added int) {
-		a.updateDriveScanProgress(driveID, scanned, added)
-	}
-	c := spider91.NewCrawler(spider91.CrawlerConfig{
+	c := scriptcrawler.NewCrawler(scriptcrawler.CrawlerConfig{
 		Driver:         drv,
 		Catalog:        a.cat,
+		SourceKind:     sourceKind,
 		PythonPath:     pythonPath,
 		ScriptPath:     scriptPath,
-		WorkDir:        filepath.Dir(scriptPath),
+		WorkDir:        workDir,
 		CommonThumbDir: a.commonThumbsDir(),
 		ProxyURL:       proxyURL,
-		OnProgress: func(progress spider91.CrawlProgress) {
-			progressMu.Lock()
-			if progress.TotalEntries == 0 && progress.NewVideos == 0 && progress.Skipped == 0 && progress.Failed == 0 {
-				checkedVideos = 0
-				expectedNewVideos = 0
-			} else if progress.TotalEntries > expectedNewVideos {
-				expectedNewVideos = progress.TotalEntries
+		ConfigJSON:     configJSON,
+		OnProgress: func(progress scriptcrawler.CrawlProgress) {
+			scanned := progress.Checked
+			if scanned < progress.TotalEntries {
+				scanned = progress.TotalEntries
 			}
-			scanned := checkedVideos
-			added := expectedNewVideos
-			progressMu.Unlock()
-			updateProgress(scanned, added)
+			added := progress.Emitted
+			if added < progress.NewVideos {
+				added = progress.NewVideos
+			}
+			a.updateDriveScanProgress(driveID, scanned, added)
 		},
-		OnCheckedVideo: func() {
-			progressMu.Lock()
-			checkedVideos++
-			scanned := checkedVideos
-			added := expectedNewVideos
-			progressMu.Unlock()
-			updateProgress(scanned, added)
-		},
-		OnExtractedVideo: func() {
-			progressMu.Lock()
-			expectedNewVideos++
-			scanned := checkedVideos
-			added := expectedNewVideos
-			progressMu.Unlock()
-			updateProgress(scanned, added)
-		},
-		// 新流程：预览视频不在每条视频入库时立即入队，而是 RunOnce 全部下完后由
-		// runSpider91Crawl 统一调 enqueueDriveGeneration 一次性入队。这样：
-		//   - 下载阶段不和 ffmpeg 抢 CPU/IO
-		//   - "等待预览视频队列 idle" 在 nightly Phase 2 的语义上更直观
-		// 不再传 OnNewVideo（crawler 内部的回调字段保留，仅为单测计数器之用）。
 	})
 
 	a.mu.Lock()
-	a.spider91Crawlers[driveID] = c
+	a.scriptCrawlers[driveID] = c
 	a.mu.Unlock()
 
-	// 确保 "91porn" 系统标签存在，并按 spider91 来源前缀给历史视频补打。
-	// 不能只靠文本匹配：老版本入库的视频可能没有 author/tags 字段，但 id 前缀
-	// "spider91-<driveID>-" 会一直保留，即使后续迁移到 PikPak/115 也不变。
+	if sourceKind == spider91.Kind {
+		a.ensureSpider91SourceTag(driveID)
+	}
+}
+
+func scriptCrawlerSourceKindForDrive(d *catalog.Drive) string {
+	if d == nil {
+		return scriptcrawler.Kind
+	}
+	if d.Kind == scriptcrawler.Kind && strings.EqualFold(strings.TrimSpace(d.Credentials["builtin"]), spider91.Kind) {
+		return spider91.Kind
+	}
+	return scriptcrawler.Kind
+}
+
+func isSpider91SourceDrive(d *catalog.Drive) bool {
+	return d != nil && (strings.EqualFold(d.Kind, spider91.Kind) || scriptCrawlerSourceKindForDrive(d) == spider91.Kind)
+}
+
+func (a *App) ensureSpider91SourceTag(driveID string) {
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	go func() {
 		defer cancel()
@@ -1455,7 +1490,7 @@ func (a *App) detachDrive(id string) {
 	delete(a.workers, id)
 	delete(a.thumbWorkers, id)
 	delete(a.fingerprintWorkers, id)
-	delete(a.spider91Crawlers, id)
+	delete(a.scriptCrawlers, id)
 	a.mu.Unlock()
 }
 
@@ -1611,7 +1646,7 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 	// spider91 / localupload 走自己的生命周期管理，不应该参与扫描清理；
 	// stats.Errors > 0 时（云盘 API 中途抖动）保守起见跳过这一轮，避免把
 	// "暂时列不出来"误认成"被用户删了"。
-	if drv.Kind() != spider91.Kind && drv.ID() != localupload.DriveID {
+	if drv.Kind() != spider91.Kind && drv.Kind() != scriptcrawler.Kind && drv.ID() != localupload.DriveID {
 		if stats.Errors > 0 {
 			log.Printf("[cleanup] skip stale cleanup for drive=%s kind=%s: scan had %d directory errors", driveID, drv.Kind(), stats.Errors)
 		} else {
@@ -1736,7 +1771,7 @@ func (a *App) spider91OriginFromVideo(ctx context.Context, v *catalog.Video) (st
 	if a == nil || v == nil {
 		return "", ""
 	}
-	if d, err := a.cat.GetDrive(ctx, v.DriveID); err == nil && d != nil && d.Kind == spider91.Kind {
+	if d, err := a.cat.GetDrive(ctx, v.DriveID); err == nil && d != nil && isSpider91SourceDrive(d) {
 		prefix := "spider91-" + d.ID + "-"
 		if strings.HasPrefix(v.ID, prefix) {
 			return d.ID, strings.TrimPrefix(v.ID, prefix)
@@ -1749,7 +1784,7 @@ func (a *App) spider91OriginFromVideo(ctx context.Context, v *catalog.Video) (st
 	bestDriveID := ""
 	bestSourceID := ""
 	for _, d := range drives {
-		if d == nil || d.Kind != spider91.Kind {
+		if d == nil || !isSpider91SourceDrive(d) {
 			continue
 		}
 		prefix := "spider91-" + d.ID + "-"
@@ -1839,7 +1874,7 @@ func (a *App) cleanupDriveVideosForDelete(ctx context.Context, driveID string) (
 		}
 	}
 
-	if strings.EqualFold(d.Kind, spider91.Kind) {
+	if isSpider91SourceDrive(d) {
 		if err := a.removeSpider91DriveDir(driveID); err != nil {
 			return 0, err
 		}
@@ -1924,7 +1959,7 @@ func (a *App) videosForDriveDelete(ctx context.Context, d *catalog.Drive) ([]*ca
 		byID[v.ID] = v
 	}
 
-	if strings.EqualFold(d.Kind, spider91.Kind) {
+	if isSpider91SourceDrive(d) {
 		prefix := "spider91-" + d.ID + "-"
 		originItems, err := a.cat.ListVideosByIDPrefix(ctx, prefix)
 		if err != nil {
@@ -2380,7 +2415,7 @@ func (a *App) regenFailedFingerprints(ctx context.Context, driveID string) {
 }
 
 // listScanTargetIDs 返回 nightly Phase 1 应扫描的所有 drive ID
-// （非 spider91、非 localupload）。它直接读 catalog，而不是 registry，这样
+// （非爬虫、非 localupload）。它直接读 catalog，而不是 registry，这样
 // 进程刚启动、云盘还在后台挂载时，nightly 也不会漏掉配置过的 drive。
 func (a *App) listScanTargetIDs(ctx context.Context) []string {
 	all, err := a.cat.ListDrives(ctx)
@@ -2390,7 +2425,7 @@ func (a *App) listScanTargetIDs(ctx context.Context) []string {
 	}
 	out := make([]string, 0, len(all))
 	for _, d := range all {
-		if d == nil || d.ID == localupload.DriveID || d.Kind == spider91.Kind {
+		if d == nil || d.ID == localupload.DriveID || d.Kind == spider91.Kind || d.Kind == scriptcrawler.Kind {
 			continue
 		}
 		out = append(out, d.ID)
@@ -2398,7 +2433,7 @@ func (a *App) listScanTargetIDs(ctx context.Context) []string {
 	return out
 }
 
-// listSpider91DriveIDs 返回 nightly Phase 2 应触发爬取的 spider91 drive ID 列表。
+// listSpider91DriveIDs 返回 nightly Phase 2 应触发爬取的爬虫 drive ID 列表。
 func (a *App) listSpider91DriveIDs(ctx context.Context) []string {
 	all, err := a.cat.ListDrives(ctx)
 	if err != nil {
@@ -2407,7 +2442,7 @@ func (a *App) listSpider91DriveIDs(ctx context.Context) []string {
 	}
 	out := make([]string, 0, len(all))
 	for _, d := range all {
-		if d != nil && d.Kind == spider91.Kind {
+		if d != nil && d.Kind == scriptcrawler.Kind {
 			out = append(out, d.ID)
 		}
 	}
@@ -2449,8 +2484,8 @@ func shouldScanDrive(d drives.Drive) bool {
 	if d == nil || d.ID() == localupload.DriveID {
 		return false
 	}
-	// spider91 由专用的 crawlerLoop 触发，不参与 scanLoop
-	if d.Kind() == spider91.Kind {
+	// 爬虫类 drive 由专用 crawl 阶段触发，不参与普通 scan
+	if d.Kind() == spider91.Kind || d.Kind() == scriptcrawler.Kind {
 		return false
 	}
 	return true
@@ -2481,65 +2516,96 @@ func (a *App) scheduleSpider91Crawl(ctx context.Context, driveID string) bool {
 	return true
 }
 
+func (a *App) scheduleScriptCrawlerCrawl(ctx context.Context, driveID string) bool {
+	if a.driveHasActiveWork(driveID) {
+		log.Printf("[scriptcrawler] drive=%s has active work, skip duplicate crawl request", driveID)
+		return false
+	}
+	if !a.beginDriveScanOrCrawl(driveID) {
+		log.Printf("[scriptcrawler] drive=%s already queued or running, skip duplicate crawl request", driveID)
+		return false
+	}
+	taskCtx, done := a.registerDriveTaskContext(ctx, driveID)
+
+	go func() {
+		defer func() {
+			a.endDriveScanOrCrawl(driveID)
+			done()
+		}()
+		a.runScriptCrawlerCrawlWithTaskContext(taskCtx, driveID)
+	}()
+	return true
+}
+
 // runSpider91Crawl 运行一次完整爬取流程并把 last_crawl_at 写回 drive.credentials。
 //
 // 即使爬取失败也会更新 last_crawl_at，避免一直在错误循环里反复触发；下一次 nightly
 // 流水线重跑时仍会重试。该方法是阻塞的，被 nightly Phase 2 串行调用，以及被
 // admin "立即抓取" 单 drive 异步调用。
 func (a *App) runSpider91Crawl(ctx context.Context, driveID string) {
+	a.runScriptCrawlerCrawl(ctx, driveID)
+}
+
+func (a *App) runScriptCrawlerCrawl(ctx context.Context, driveID string) {
 	if !a.beginDriveScanOrCrawl(driveID) {
-		log.Printf("[spider91] drive=%s already queued or running, skip direct crawl", driveID)
+		log.Printf("[scriptcrawler] drive=%s already queued or running, skip direct crawl", driveID)
 		return
 	}
 	defer a.endDriveScanOrCrawl(driveID)
 	taskCtx, done := a.registerDriveTaskContext(ctx, driveID)
 	defer done()
-	a.runSpider91CrawlWithTaskContext(taskCtx, driveID)
+	a.runScriptCrawlerCrawlWithTaskContext(taskCtx, driveID)
 }
 
 func (a *App) runSpider91CrawlWithTaskContext(ctx context.Context, driveID string) bool {
+	return a.runScriptCrawlerCrawlWithTaskContext(ctx, driveID)
+}
+
+func (a *App) runScriptCrawlerCrawlWithTaskContext(ctx context.Context, driveID string) bool {
 	if err := ctx.Err(); err != nil {
-		log.Printf("[spider91] drive=%s crawl canceled before start: %v", driveID, err)
+		log.Printf("[scriptcrawler] drive=%s crawl canceled before start: %v", driveID, err)
 		return false
 	}
 	a.mu.Lock()
-	c := a.spider91Crawlers[driveID]
+	c := a.scriptCrawlers[driveID]
 	a.mu.Unlock()
 	if c == nil {
 		if err := a.ensureDriveAttached(ctx, driveID); err != nil {
-			log.Printf("[spider91] drive=%s attach failed: %v", driveID, err)
+			log.Printf("[scriptcrawler] drive=%s attach failed: %v", driveID, err)
 			return false
 		}
 		a.mu.Lock()
-		c = a.spider91Crawlers[driveID]
+		c = a.scriptCrawlers[driveID]
 		a.mu.Unlock()
 		if c == nil {
-			log.Printf("[spider91] drive=%s crawler not attached", driveID)
+			log.Printf("[scriptcrawler] drive=%s crawler not attached", driveID)
 			return false
 		}
 	}
 
 	d, err := a.cat.GetDrive(ctx, driveID)
 	if err != nil || d == nil {
-		log.Printf("[spider91] drive=%s lookup failed: %v", driveID, err)
+		log.Printf("[scriptcrawler] drive=%s lookup failed: %v", driveID, err)
 		return false
 	}
-	targetNew := spider91IntCred(d, "target_new", spider91.DefaultTargetNew)
+	defaultTargetNew := scriptcrawler.DefaultTargetNew
+	if scriptCrawlerSourceKindForDrive(d) == spider91.Kind {
+		defaultTargetNew = spider91.DefaultTargetNew
+	}
+	targetNew := spider91IntCred(d, "target_new", defaultTargetNew)
 	if targetNew <= 0 {
-		targetNew = spider91.DefaultTargetNew
+		targetNew = defaultTargetNew
 	}
 
-	log.Printf("[spider91] drive=%s start crawl target_new=%d", driveID, targetNew)
+	log.Printf("[scriptcrawler] drive=%s start crawl target_new=%d", driveID, targetNew)
 	res, runErr := c.RunOnce(ctx, targetNew)
 	if runErr != nil {
-		log.Printf("[spider91] drive=%s crawl failed: %v", driveID, runErr)
+		log.Printf("[scriptcrawler] drive=%s crawl failed: %v", driveID, runErr)
 	} else if res != nil {
-		log.Printf("[spider91] drive=%s crawl done target=%d total=%d new=%d skipped=%d failed=%d seen_snapshot=%d",
+		log.Printf("[scriptcrawler] drive=%s crawl done target=%d total=%d new=%d skipped=%d failed=%d seen_snapshot=%d",
 			driveID, res.TargetNew, res.TotalEntries, res.NewVideos, res.Skipped, res.Failed, res.SeenSnapshot)
 	}
 
-	// 标记最后一次爬取时间。这字段已不再用于调度判定（nightly 流水线统一调度），
-	// 留着仅作为 admin UI 显示"上次抓取 N 小时前"用。
 	if d.Credentials == nil {
 		d.Credentials = make(map[string]string)
 	}
@@ -2552,18 +2618,13 @@ func (a *App) runSpider91CrawlWithTaskContext(ctx context.Context, driveID strin
 		d.LastError = ""
 	}
 	if err := a.cat.UpsertDrive(ctx, d); err != nil {
-		log.Printf("[spider91] drive=%s update last_crawl_at: %v", driveID, err)
+		log.Printf("[scriptcrawler] drive=%s update last_crawl_at: %v", driveID, err)
 	}
 	if err := ctx.Err(); err != nil {
-		log.Printf("[spider91] drive=%s crawl canceled after run: %v", driveID, err)
+		log.Printf("[scriptcrawler] drive=%s crawl canceled after run: %v", driveID, err)
 		return false
 	}
 
-	// 爬取全部完成后，统一把所有还 pending 的预览视频入队。
-	// 这是新流水线设计：crawler 自身不再每条入库就立即触发预览视频生成，
-	// 让"下载阶段"和"预览视频阶段"在时间上分清楚（也跟 nightly Phase 2
-	// 的"等预览视频队列 idle"语义对齐）。enqueueDriveGeneration 内部会读
-	// 该 drive 当前的 teaser_enabled，关闭时是 noop。
 	a.mu.Lock()
 	worker := a.workers[driveID]
 	thumbWorker := a.thumbWorkers[driveID]

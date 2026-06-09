@@ -8,6 +8,7 @@ import { AdminLayout } from "@/admin/AdminLayout";
 import { LoginPage } from "@/admin/LoginPage";
 import { RequireAuth } from "@/admin/RequireAuth";
 import { DrivesPage } from "@/admin/DrivesPage";
+import { CrawlersPage } from "@/admin/CrawlersPage";
 import { VideosPage } from "@/admin/VideosPage";
 import { TagsPage } from "@/admin/TagsPage";
 import { ThemePage } from "@/admin/ThemePage";
@@ -70,6 +71,7 @@ export default function App() {
       >
         <Route index element={<Navigate to="/admin/drives" replace />} />
         <Route path="drives" element={<DrivesPage />} />
+        <Route path="crawlers" element={<CrawlersPage />} />
         <Route path="videos" element={<VideosPage />} />
         <Route path="tags" element={<TagsPage />} />
         <Route path="theme" element={<ThemePage />} />

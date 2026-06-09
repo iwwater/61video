@@ -26,7 +26,6 @@ const DRIVE_OPTIONS: DriveOption[] = [
   { kind: "onedrive", label: "OneDrive", abbr: "OD", desc: "302直链，微软网盘" },
   { kind: "googledrive", label: "Google Drive", abbr: "GD", desc: "服务器中转模式" },
   { kind: "localstorage", label: "本地存储", abbr: "Lo", desc: "本机文件目录" },
-  { kind: "spider91", label: "91 爬虫", abbr: "91", desc: "自动抓取热门视频" },
   { kind: "quark", label: "夸克网盘", abbr: "Qk", desc: "302直链" },
   { kind: "wopan", label: "联通沃盘", abbr: "Wo", desc: "302直链" },
 ];

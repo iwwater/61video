@@ -325,6 +325,10 @@ export function DrivesPage() {
   }
 
   async function handleRescan(d: api.AdminDrive) {
+    if (d.kind === "spider91") {
+      show("91Spider 不再支持通过网盘运行，请到爬虫管理添加爬虫脚本", "info");
+      return;
+    }
     if (nightlyBusy) {
       show(nightlyBusyText(nightlyStatus) || NIGHTLY_BUSY_MESSAGE, "info");
       return;
@@ -345,11 +349,7 @@ export function DrivesPage() {
         refreshDriveList();
         return;
       }
-      if (d.kind === "spider91") {
-        show("已触发抓取任务，需要 2-4 分钟，可稍后刷新视频列表查看", "success");
-      } else {
-        show("已触发扫描，可稍后刷新视频列表查看", "success");
-      }
+      show("已触发扫描，可稍后刷新视频列表查看", "success");
       refreshDriveList();
     } catch (e) {
       show(e instanceof Error ? e.message : "触发失败", "error");
@@ -550,10 +550,8 @@ export function DrivesPage() {
                 )}
                 {d.kind === "spider91" && (
                   <div className="admin-detail-row">
-                    <span className="admin-detail-label">上次抓取时间</span>
-                    <span className="admin-detail-value">
-                      {d.lastCrawlAt ? new Date(d.lastCrawlAt * 1000).toLocaleString() : "尚未抓取"}
-                    </span>
+                    <span className="admin-detail-label">配置状态</span>
+                    <span className="admin-detail-value">已废弃，请到爬虫管理添加</span>
                   </div>
                 )}
               </div>
@@ -567,9 +565,12 @@ export function DrivesPage() {
                     type="button"
                     className="admin-btn is-primary"
                     onClick={() => handleRescan(d)}
-                    aria-disabled={nightlyBusy || isDriveBusy(d) || !!scanningDriveIds[d.id]}
+                    disabled={d.kind === "spider91"}
+                    aria-disabled={d.kind === "spider91" || nightlyBusy || isDriveBusy(d) || !!scanningDriveIds[d.id]}
                     title={
-                      nightlyBusy
+                      d.kind === "spider91"
+                        ? "91Spider 不再支持通过网盘运行，请到爬虫管理添加爬虫脚本"
+                        : nightlyBusy
                         ? nightlyBusyText(nightlyStatus) || NIGHTLY_BUSY_MESSAGE
                         : isDriveBusy(d) || scanningDriveIds[d.id]
                         ? DRIVE_BUSY_MESSAGE
@@ -579,7 +580,7 @@ export function DrivesPage() {
                     {d.kind === "spider91" ? (
                       <>
                         <Download size={13} className={scanningDriveIds[d.id] ? "admin-spin" : undefined} />
-                        {scanningDriveIds[d.id] ? "触发中..." : "立即抓取"}
+                        已废弃
                       </>
                     ) : (
                       <>
@@ -599,9 +600,11 @@ export function DrivesPage() {
                     {stoppingDriveId === d.id ? "停止中..." : "停止所有任务"}
                   </button>
                 </div>
-                <button type="button" className="admin-btn" onClick={() => openEdit(d)}>
-                  {d.kind === "spider91" ? "编辑配置" : "编辑配置凭证"}
-                </button>
+                {d.kind !== "spider91" && (
+                  <button type="button" className="admin-btn" onClick={() => openEdit(d)}>
+                    编辑配置凭证
+                  </button>
+                )}
                 <button type="button" className="admin-btn is-danger admin-detail-actions__danger" onClick={() => setDeleteTarget(d)}>
                   <Trash2 size={13} /> 删除网盘
                 </button>

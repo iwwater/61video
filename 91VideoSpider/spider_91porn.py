@@ -12,6 +12,9 @@
     pip install requests beautifulsoup4 lxml PySocks
 
 使用方法:
+    # 作为 video-site-91 通用爬虫脚本运行（后台会自动这样调用）
+    python spider_91porn.py --job /path/to/job.json
+
     # 全量爬取（默认行为，从 page=1 一直爬到末尾，写到 OUTPUT_FILE）
     python spider_91porn.py
 
@@ -22,6 +25,7 @@
     python spider_91porn.py --target-new 15 --seen-viewkeys-file /tmp/seen.txt --output /tmp/new.json
 
 CLI 参数:
+    --job FILE                crawler.v1 job JSON 路径；后台爬虫管理会使用此模式
     --page N                  只爬第 N 页，配合 --output 用于手动调试
     --target-new N            从 page 1 起翻页直到凑够 N 个新视频（不在 seen 列表里的）
     --seen-viewkeys-file FILE 每行一个已知 viewkey 或 mp4 源 ID，命中即跳过；与 --target-new 配合使用
@@ -37,6 +41,8 @@ CLI 参数:
     - OUTPUT_FILE : 输出文件名
 
 输出格式 (JSON):
+    --job 模式下 stdout 输出 crawler.v1 JSON Lines，日志全部写到 stderr。
+    手动运行模式仍会写传统 JSON 文件：
     {
       "videos": [
         {
@@ -77,8 +83,8 @@ from datetime import datetime
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    print("错误: 缺少依赖库 beautifulsoup4")
-    print("请运行: pip install beautifulsoup4 lxml")
+    print("错误: 缺少依赖库 beautifulsoup4", file=sys.stderr)
+    print("请运行: pip install beautifulsoup4 lxml", file=sys.stderr)
     sys.exit(1)
 
 
@@ -148,7 +154,21 @@ OUTPUT_FILE = "91porn_videos.json"
 MAX_PAGES = None          # 设置为 None 爬取所有页，或设置整数如 5 只爬前5页
 RESUME = True             # 是否跳过输出文件中已存在的 viewkey (断点续爬)
 MAX_EMPTY_PAGES = 2       # 连续空页数达到此值时停止爬取
+CRAWLER_PROTOCOL = "crawler.v1"
 # ===================================================
+
+
+def crawler_source_id(raw: str) -> str:
+    """Return a backend-safe source_id, preserving existing numeric 91 IDs."""
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._-")
+    return safe[:160]
+
+
+def write_jsonl(event: dict):
+    print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
 class Porn91Spider:
@@ -163,6 +183,7 @@ class Porn91Spider:
         target_new: int = None,
         seen_viewkeys: list = None,
         stream_output: bool = False,
+        stream_protocol: str = "legacy",
     ):
         """
         构造函数。所有参数都有默认值，等同于使用脚本顶部的全局配置。
@@ -198,6 +219,7 @@ class Porn91Spider:
         # （配合 backend Go 端 bufio.Scanner 实时消费，下载一个就开始下一个）。
         # 开启后所有 log 都走 stderr。
         self.stream_output = bool(stream_output)
+        self.stream_protocol = stream_protocol or "legacy"
 
         # 添加重试适配器
         try:
@@ -263,7 +285,28 @@ class Porn91Spider:
         if not self.stream_output:
             return
         try:
-            print(json.dumps(video, ensure_ascii=False), flush=True)
+            if self.stream_protocol == "crawler.v1":
+                source_id = crawler_source_id(video.get("source_id") or video.get("viewkey") or "")
+                item = {
+                    "title": video.get("title") or "",
+                    "detail_url": video.get("detail_url") or "",
+                    "author": "91porn",
+                    "tags": ["91porn"],
+                    "media_url": video.get("video_url") or "",
+                    "thumbnail_url": video.get("thumb_url") or "",
+                    "headers": {
+                        "Referer": video.get("detail_url") or BASE_URL,
+                    },
+                }
+                if source_id:
+                    item["source_id"] = source_id
+                event = {
+                    "type": "item",
+                    "item": item,
+                }
+                write_jsonl(event)
+            else:
+                print(json.dumps(video, ensure_ascii=False), flush=True)
         except Exception as e:
             # stdout 异常基本只在管道断开时发生（消费方进程死了）；
             # 写到 stderr 让 backend 看到，然后让 crawl 循环自己 break。
@@ -697,8 +740,9 @@ class Porn91Spider:
         except Exception as e:
             self.log(f"保存文件失败: {e}")
             # 尝试输出到控制台作为备份
-            print("\n--- 备份输出 ---")
-            print(json.dumps(output_data, ensure_ascii=False, indent=2))
+            backup_out = sys.stderr if self.stream_output else sys.stdout
+            print("\n--- 备份输出 ---", file=backup_out, flush=True)
+            print(json.dumps(output_data, ensure_ascii=False, indent=2), file=backup_out, flush=True)
 
     def _print_summary(self):
         """
@@ -751,6 +795,84 @@ def print_help():
 """)
 
 
+def run_job(job_path: str):
+    """Run as a crawler.v1 script plugin.
+
+    The Go host passes a job JSON file and expects stdout JSONL events. Logs go
+    to stderr so stdout stays machine-readable.
+    """
+    with open(job_path, "r", encoding="utf-8") as f:
+        job = json.load(f)
+
+    if job.get("protocol") != CRAWLER_PROTOCOL:
+        raise ValueError(f"unsupported crawler protocol: {job.get('protocol')!r}")
+    if job.get("mode") not in ("", None, "crawl"):
+        raise ValueError(f"unsupported crawler mode: {job.get('mode')!r}")
+
+    try:
+        target_new = int(job.get("target_new") or 15)
+    except (TypeError, ValueError):
+        target_new = 15
+    if target_new <= 0:
+        target_new = 15
+    seen_file = job.get("seen_source_ids_file") or ""
+    output_dir = job.get("output_dir") or os.getcwd()
+    run_id = job.get("run_id") or datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, f"spider91-{run_id}.json")
+
+    network = job.get("network") if isinstance(job.get("network"), dict) else {}
+    proxy_url = str(network.get("proxy_url") or "").strip()
+    if proxy_url:
+        os.environ["HTTP_PROXY"] = proxy_url
+        os.environ["HTTPS_PROXY"] = proxy_url
+        os.environ["http_proxy"] = proxy_url
+        os.environ["https_proxy"] = proxy_url
+        os.environ["NO_PROXY"] = ""
+        os.environ["no_proxy"] = ""
+
+    seen_viewkeys = []
+    if seen_file:
+        try:
+            with open(seen_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        seen_viewkeys.append(line)
+        except FileNotFoundError:
+            print(f"警告: seen_source_ids_file 不存在: {seen_file}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"警告: 读取 seen_source_ids_file 失败: {e}", file=sys.stderr, flush=True)
+
+    prefer_ipv4_for_plain_socks5_proxy()
+    spider = Porn91Spider(
+        output_file=output_file,
+        start_page=1,
+        max_pages=None,
+        resume=False,
+        quiet=True,
+        target_new=target_new,
+        seen_viewkeys=seen_viewkeys,
+        stream_output=True,
+        stream_protocol="crawler.v1",
+    )
+    try:
+        spider.crawl()
+        done = {
+            "type": "done",
+            "stats": {
+                "emitted": spider.processed_videos,
+                "failed": spider.failed_videos,
+                "skipped": spider.skipped_videos,
+            },
+        }
+        write_jsonl(done)
+    except KeyboardInterrupt:
+        spider.log("\n用户中断，正在保存已爬取的数据...")
+        spider._save_results()
+        raise
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help', 'help'):
         print_help()
@@ -778,8 +900,14 @@ def main():
     parser.add_argument("--stream-output", action="store_true",
                         help="流式模式：每解析一条视频直链就立即把它作为一行 JSON 写到 stdout 并 flush；"
                              "日志改走 stderr。配合 backend 边读边下载使用。")
+    parser.add_argument("--job", type=str, default=None,
+                        help="crawler.v1 job JSON 路径；作为通用脚本爬虫运行。")
 
     args, _ = parser.parse_known_args()
+    if args.job:
+        run_job(args.job)
+        return
+
     cli_out = sys.stderr if args.stream_output else sys.stdout
     prefer_ipv4_for_plain_socks5_proxy()
 

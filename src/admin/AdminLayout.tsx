@@ -14,6 +14,7 @@ import {
 import * as api from "./api";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./ToastContext";
+import { SpiderIcon } from "./icons/SpiderIcon";
 
 export function AdminLayout() {
   const { logout } = useAuth();
@@ -87,6 +88,14 @@ export function AdminLayout() {
             }
           >
             <HardDrive size={16} /> 网盘管理
+          </NavLink>
+          <NavLink
+            to="/admin/crawlers"
+            className={({ isActive }) =>
+              `admin-nav__link ${isActive ? "is-active" : ""}`
+            }
+          >
+            <SpiderIcon size={16} /> 爬虫管理
           </NavLink>
           <NavLink
             to="/admin/videos"

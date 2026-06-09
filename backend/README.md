@@ -23,6 +23,7 @@ internal/
     onedrive/               OneDrive（OpenList 在线续期 + Microsoft Graph 文件接口）
     googledrive/            Google Drive（OpenList 在线续期 + Google Drive API；播放走后端代理）
     localstorage/           本地目录扫描（服务器已有视频目录）
+    scriptcrawler/          通用脚本爬虫输出的本地媒体适配层
   scanner/                  扫目录 → 落库
   preview/                  ffmpeg 抽封面和生成多段预览视频
   proxy/                    /p/stream/*、/p/preview/* 代理
@@ -78,6 +79,12 @@ npm run build       构建前端静态资源
 npm run preview     前端 9191，无热更新
 go run ./cmd/server 后端 9192
 ```
+
+## 爬虫脚本
+
+爬虫现在是独立后台栏目 `/admin/crawlers`，不再作为“网盘/存储类型”配置。脚本负责发现视频，后端负责去重、下载、入库、封面、预览视频和视频指纹。
+
+脚本协议见 [docs/crawler-protocol.md](../docs/crawler-protocol.md)。后台支持上传 `.py` 文件或通过 HTTP(S) 脚本链接导入，导入后的脚本会保存到数据目录旁的 `crawler-scripts/`。内置 91 爬虫也支持同一套 `crawler.v1` job 协议；后台“内置 91”会自动使用仓库里的 `91VideoSpider/spider_91porn.py`。
 
 ## 添加一个盘
 

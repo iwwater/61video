@@ -308,6 +308,33 @@
   margin-bottom: var(--space-3);
 }
 
+.admin-crawler-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(360px, 1.2fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.admin-crawler-detail {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.admin-crawler-status {
+  grid-column: 1 / -1;
+}
+
+.admin-crawler-list .admin-drive-teaser {
+  width: 100%;
+}
+
+.admin-crawler-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
 /* ----- Storage summary ----- */
 .admin-storage-summary {
   display: grid;
@@ -444,6 +471,21 @@
   display: flex;
   gap: var(--space-2);
   align-items: center;
+}
+
+.admin-crawler-import {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.admin-crawler-import__file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .admin-form__help {
@@ -1545,6 +1587,15 @@
   .admin-form__row input,
   .admin-form__row select,
   .admin-form__row textarea {
+    width: 100%;
+  }
+
+  .admin-crawler-import {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-crawler-import .admin-btn {
+    justify-content: center;
     width: 100%;
   }
 
@@ -3332,6 +3383,7 @@
 }
 
 @media (max-width: 900px) {
+  .admin-crawler-layout,
   .admin-tags-layout {
     grid-template-columns: 1fr;
   }

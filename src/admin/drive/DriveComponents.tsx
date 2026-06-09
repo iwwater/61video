@@ -101,13 +101,17 @@ export function StatusTag({
   error?: string;
   hasCred: boolean;
 }) {
+  if (kind === "spider91") {
+    return (
+      <span className="admin-status is-error" title={error || "请到爬虫管理添加爬虫脚本"}>
+        已废弃
+      </span>
+    );
+  }
   if (kind !== "spider91" && !hasCred) {
     return <span className="admin-status is-pending">未配置凭证</span>;
   }
   if (status === "ok") {
-    if (kind === "spider91") {
-      return <span className="admin-status is-ok">已就绪</span>;
-    }
     return <span className="admin-status is-ok">已连接</span>;
   }
   if (status === "error")
@@ -205,7 +209,7 @@ export function DriveGenerationPanel({
 
       <div className="admin-gen-columns">
         <DriveGenCol
-          label={d.kind === "spider91" ? "抓取" : "扫盘"}
+          label={d.kind === "spider91" ? "已废弃" : "扫盘"}
           status={d.scanGenerationStatus}
           showCounts={false}
         />

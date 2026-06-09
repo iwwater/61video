@@ -12,13 +12,14 @@ async function request<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
+  const headers = new Headers(init.headers ?? {});
+  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const res = await fetch(BASE + path, {
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
     ...init,
+    headers,
   });
   if (res.status === 401) {
     throw new UnauthorizedError();
@@ -186,6 +187,99 @@ export function stopDriveTasks(id: string) {
     `/drives/${encodeURIComponent(id)}/tasks/stop`,
     { method: "POST" }
   );
+}
+
+// ---------- Crawlers ----------
+
+export type AdminCrawler = {
+  id: string;
+  name: string;
+  kind: "scriptcrawler" | "spider91";
+  builtin?: string;
+  status: string;
+  lastError?: string;
+  scriptPath: string;
+  pythonPath?: string;
+  proxy?: string;
+  targetNew?: string;
+  configJson?: string;
+  lastCrawlAt?: number;
+  scanGenerationStatus?: DriveGenerationStatus;
+  thumbnailGenerationStatus?: DriveGenerationStatus;
+  previewGenerationStatus?: DriveGenerationStatus;
+  fingerprintGenerationStatus?: DriveGenerationStatus;
+  thumbnailReadyCount: number;
+  thumbnailPendingCount: number;
+  thumbnailFailedCount: number;
+  teaserReadyCount: number;
+  teaserPendingCount: number;
+  teaserFailedCount: number;
+  fingerprintReadyCount: number;
+  fingerprintPendingCount: number;
+  fingerprintFailedCount: number;
+};
+
+export type UpsertCrawlerInput = {
+  id: string;
+  name: string;
+  builtin?: string;
+  scriptPath: string;
+  pythonPath?: string;
+  proxy?: string;
+  targetNew?: string;
+  configJson?: string;
+};
+
+export type ImportCrawlerScriptResult = {
+  scriptPath: string;
+};
+
+export function listCrawlers() {
+  return request<AdminCrawler[]>("/crawlers");
+}
+
+export function upsertCrawler(body: UpsertCrawlerInput) {
+  return request<{ ok: boolean; warning?: string }>("/crawlers", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function importCrawlerScriptFile(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  return request<ImportCrawlerScriptResult>("/crawlers/import-file", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function importCrawlerScriptURL(url: string) {
+  return request<ImportCrawlerScriptResult>("/crawlers/import-url", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
+export function runCrawler(id: string) {
+  return request<{ ok: boolean; accepted: boolean; message?: string; status?: NightlyJobStatus }>(
+    `/crawlers/${encodeURIComponent(id)}/run`,
+    { method: "POST" }
+  );
+}
+
+export function stopCrawlerTasks(id: string) {
+  return request<{ ok: boolean; stopped: boolean }>(
+    `/crawlers/${encodeURIComponent(id)}/tasks/stop`,
+    { method: "POST" }
+  );
+}
+
+export function deleteCrawler(id: string) {
+  return request<{ ok: boolean; deletedVideos: number }>(`/crawlers/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ deleteVideos: true }),
+  });
 }
 
 export type P123QRSession = {

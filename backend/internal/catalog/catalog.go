@@ -706,7 +706,19 @@ func (c *Catalog) ListVideoFileIDsByDrive(ctx context.Context, driveID string) (
 // 用途：crawler 把这个集合写到 seen 文件，让 Python/Go 跳过已爬过的视频，
 // 配合 --target-new 真正凑出 N 个未爬过的视频。
 func (c *Catalog) ListSpider91Viewkeys(ctx context.Context, driveID string) ([]string, error) {
-	prefix := "spider91-" + driveID + "-"
+	return c.ListCrawlerSourceIDs(ctx, "spider91", driveID)
+}
+
+// ListCrawlerSourceIDs lists source IDs that were already imported by a
+// crawler-like drive. It reads both videos and deleted_videos so explicit admin
+// deletions remain tombstoned for future crawler runs.
+func (c *Catalog) ListCrawlerSourceIDs(ctx context.Context, kind, driveID string) ([]string, error) {
+	kind = strings.TrimSpace(kind)
+	driveID = strings.TrimSpace(driveID)
+	if kind == "" || driveID == "" {
+		return nil, nil
+	}
+	prefix := kind + "-" + driveID + "-"
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT SUBSTR(id, ?) FROM videos WHERE id LIKE ? || '%'
 		 UNION
