@@ -6,20 +6,24 @@ const shortsPageSource = readFileSync(
   new URL("../src/pages/ShortsPage.tsx", import.meta.url),
   "utf8"
 );
+const videosDataSource = readFileSync(
+  new URL("../src/data/videos.ts", import.meta.url),
+  "utf8"
+);
 
-test("shorts recommendation preference follows successful likes instead of watch time", () => {
+test("shorts does not keep recommendation preference from likes or watch time", () => {
   assert.doesNotMatch(shortsPageSource, /currentTime\s*>=\s*3/);
   assert.doesNotMatch(shortsPageSource, /onPreferenceReady/);
+  assert.doesNotMatch(shortsPageSource, /preferredFromVideoId/);
+  assert.doesNotMatch(videosDataSource, /preferredFromVideoId/);
 
   const match = /const handleLikeToggle[\s\S]*?const hasLiked/.exec(
     shortsPageSource
   );
   assert.ok(match, "handleLikeToggle block should be present");
 
-  assert.match(
-    match[0],
-    /if \(liked\) \{\s*preferredFromVideoIdRef\.current = videoId;\s*\} else if \(preferredFromVideoIdRef\.current === videoId\) \{\s*preferredFromVideoIdRef\.current = null;/
-  );
+  assert.doesNotMatch(match[0], /preferred/i);
+  assert.match(videosDataSource, /body: JSON\.stringify\(\{ seenIds, count \}\)/);
 });
 
 test("shorts progress dragging uses immediate pointer state", () => {
@@ -34,7 +38,7 @@ test("shorts progress dragging uses immediate pointer state", () => {
 test("shorts progress listeners rebind when deferred videos mount", () => {
   assert.match(
     shortsPageSource,
-    /MOUNT_RADIUS 会让远离当前屏的 slide 先以海报占位/
+    /VIDEO_WINDOW_SIZE 会让窗口外的 slide 先以海报占位/
   );
   assert.match(shortsPageSource, /if \(!shouldMount\) \{\s*setDuration\(0\);\s*setCurrentTime\(0\);/);
   assert.match(
@@ -43,10 +47,14 @@ test("shorts progress listeners rebind when deferred videos mount", () => {
   );
 });
 
-test("shorts preloads the next original video only after the active video has comfortable buffer", () => {
+test("shorts preloads the next two original videos only after the active video has comfortable buffer", () => {
   assert.match(shortsPageSource, /const \[activeReadyForPreload, setActiveReadyForPreload\] = useState\(false\);/);
   assert.match(shortsPageSource, /const ACTIVE_PRELOAD_BUFFER_SECONDS = 12;/);
-  assert.match(shortsPageSource, /const shouldPreload = activeReadyForPreload && index === activeIndex \+ 1;/);
+  assert.match(shortsPageSource, /const PRELOAD_AHEAD_COUNT = 2;/);
+  assert.match(
+    shortsPageSource,
+    /const preloadOffset = index - activeIndex;[\s\S]*?preloadOffset > 0 &&[\s\S]*?preloadOffset <= PRELOAD_AHEAD_COUNT;/
+  );
   assert.match(shortsPageSource, /const shouldLoad = isActiveSlide \|\| shouldPreload \|\| shouldRetainCached;/);
   assert.match(shortsPageSource, /shouldLoad=\{shouldLoad\}/);
   assert.match(shortsPageSource, /setActiveReadyForPreload\(false\);\s*setActiveIndex\(bestIndex\);/);
@@ -79,24 +87,51 @@ test("shorts preload grant uses high/low watermark hysteresis", () => {
   );
 });
 
-test("shorts keeps adjacent buffered sources as a lightweight cache", () => {
+test("shorts waits for the queue end before starting a new seen round", () => {
+  assert.match(
+    shortsPageSource,
+    /if \(roundComplete\) \{[\s\S]*?if \(remaining > 0\) return;[\s\S]*?seenIdsRef\.current = \[\];[\s\S]*?saveSeenIds\(\[\]\);/
+  );
+});
+
+test("shorts keeps buffered sources inside a six video window", () => {
   assert.match(shortsPageSource, /const \[cacheableSourceIds, setCacheableSourceIds\] = useState<Set<string>>/);
   assert.match(shortsPageSource, /setCacheableSourceIds\(\(prev\) => \{/);
-  // 相邻屏内（前一条或后一条）已缓冲过的视频都保留 src，回滑/再前滑均复用缓存
+  assert.match(shortsPageSource, /const VIDEO_WINDOW_SIZE = 6;/);
+  assert.doesNotMatch(shortsPageSource, /VIDEO_WINDOW_BACKWARD_BIAS/);
+  assert.match(shortsPageSource, /const \[cacheWindowHighIndex, setCacheWindowHighIndex\] = useState\(-1\);/);
+  assert.match(shortsPageSource, /setCacheWindowHighIndex\(\(prev\) => Math\.max\(prev, activeIndex\)\);/);
+  assert.match(shortsPageSource, /function getVideoWindowBounds\(highestViewedIndex: number, itemCount: number\)/);
   assert.match(
     shortsPageSource,
-    /const shouldRetainCached =\s*shouldMount && !isActiveSlide && cacheableSourceIds\.has\(item\.id\);/
+    /const videoWindow = getVideoWindowBounds\(cacheWindowHighIndex, items\.length\);/
   );
-  // 活跃视频一旦 canplay 就标记可复用，快速划走的视频回滑也有缓存
   assert.match(
     shortsPageSource,
-    /if \(isActive\) onSourceCached\(item\.id\);/
+    /const isInCacheWindow =\s*index >= videoWindow\.start && index <= videoWindow\.end;/
   );
-  // 预加载中的下一条积累到足够缓冲后同样标记，授权收回时不丢弃其数据
   assert.match(
     shortsPageSource,
-    /if \(!isActive && shouldLoad && videoHasComfortableBuffer\(video\)\) \{\s*onSourceCached\(item\.id\);/
+    /const shouldMount = isActiveSlide \|\| isInCacheWindow \|\| shouldPreload;/
   );
+  // 视频窗口内已缓冲过的视频都保留 src，来回切换均复用缓存
+  assert.match(
+    shortsPageSource,
+    /const shouldRetainCached =\s*isInCacheWindow && !isActiveSlide && cacheableSourceIds\.has\(item\.id\);/
+  );
+  // 窗口内视频一旦 canplay 就标记可复用，快速划走的视频回滑也有缓存
+  assert.match(
+    shortsPageSource,
+    /if \(shouldLoad\) onSourceCached\(item\.id\);/
+  );
+  // 窗口内视频只要已经产生缓冲就同样标记，授权收回时不丢弃其数据
+  assert.match(
+    shortsPageSource,
+    /if \(shouldLoad && videoHasBufferedData\(video\)\) \{\s*onSourceCached\(item\.id\);/
+  );
+  const playbackBlock = /\/\/ 控制每个 video 的播放状态与音量[\s\S]*?\}, \[activeIndex, muted, volume, items\.length\]\);/.exec(shortsPageSource);
+  assert.ok(playbackBlock, "parent playback effect should be present");
+  assert.doesNotMatch(playbackBlock[0], /currentTime\s*=\s*0/);
   assert.match(shortsPageSource, /shouldEagerLoad=\{shouldEagerLoad\}/);
   assert.match(shortsPageSource, /preload=\{shouldLoad \? \(shouldEagerLoad \? "auto" : "metadata"\) : "none"\}/);
 });

@@ -530,11 +530,9 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 }
 
 // shortsNextReq 客户端把当前轮已看过的 video id 列表传上来。
-// PreferredFromVideoID 来自短视频页最近一次点赞成功的视频，用于优先推荐相似标签。
 type shortsNextReq struct {
-	SeenIDs              []string `json:"seenIds"`
-	Count                int      `json:"count"`
-	PreferredFromVideoID string   `json:"preferredFromVideoId"`
+	SeenIDs []string `json:"seenIds"`
+	Count   int      `json:"count"`
 }
 
 // ShortsItemDTO 是短视频流单条的精简结构。比 VideoDTO 多 videoSrc / poster，
@@ -552,8 +550,8 @@ type ShortsItemDTO struct {
 //   - 服务器从未在 seenIds 中的可见视频里随机抽至多 count 条返回
 //   - 当返回数量 < count 且小于全库可见总数时，说明本轮即将结束，
 //     返回 roundComplete=true，前端应在用户看完返回的这些后清空本地已看记录开新一轮
-//   - 当 seenIds 已经覆盖全库时，本接口直接返回新一轮的随机一批
-//     （传 seenIds=[] 即可让客户端在轮次完成后重新开始）
+//   - 当 seenIds 真实覆盖当前全部可见视频时，本接口直接返回新一轮的随机一批
+//     （不能仅看 seenIds 长度，里面可能有隐藏、删除或历史脏 ID）
 func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 	var body shortsNextReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
@@ -574,21 +572,17 @@ func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 如果客户端已看记录已经 ≥ 全库，则视为新一轮，直接忽略 seenIds
-	exclude := body.SeenIDs
-	if total > 0 && len(exclude) >= total {
-		exclude = nil
-	}
-
-	var items []*catalog.Video
-	if strings.TrimSpace(body.PreferredFromVideoID) != "" {
-		items, err = s.Catalog.RandomVideosForPreferredVideoExcluding(r.Context(), body.PreferredFromVideoID, exclude, count)
-	} else {
-		items, err = s.Catalog.RandomVideosExcluding(r.Context(), exclude, count)
-	}
+	items, err := s.Catalog.RandomVideosExcluding(r.Context(), body.SeenIDs, count)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	if total > 0 && len(items) == 0 && len(body.SeenIDs) > 0 {
+		items, err = s.Catalog.RandomVideosExcluding(r.Context(), nil, count)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 
 	// 注入 sourceLabel 以便前端展示来源网盘

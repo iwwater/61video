@@ -51,44 +51,44 @@ func (c *Catalog) Close() error { return c.db.Close() }
 // ---------- Video ----------
 
 type Video struct {
-	ID                string    `json:"id"`
-	DriveID           string    `json:"driveId"`
-	FileID            string    `json:"fileId"`
-	FileName          string    `json:"fileName"`
-	ContentHash       string    `json:"contentHash"`
-	SampledSHA256     string    `json:"sampledSha256"`
-	FingerprintStatus string    `json:"fingerprintStatus"`
-	FingerprintError  string    `json:"fingerprintError"`
-	ParentID          string    `json:"parentId"`
-	Title             string    `json:"title"`
-	Author            string    `json:"author"`
-	Tags              []string  `json:"tags"`
-	DurationSeconds   int       `json:"durationSeconds"`
-	Size              int64     `json:"size"`
-	Ext               string    `json:"ext"`
-	Quality           string    `json:"quality"`
-	ThumbnailURL      string    `json:"thumbnailUrl"`
-	PreviewFileID     string    `json:"previewFileId"`
-	PreviewLocal      string    `json:"previewLocal"`
-	PreviewStatus     string    `json:"previewStatus"`
+	ID                string   `json:"id"`
+	DriveID           string   `json:"driveId"`
+	FileID            string   `json:"fileId"`
+	FileName          string   `json:"fileName"`
+	ContentHash       string   `json:"contentHash"`
+	SampledSHA256     string   `json:"sampledSha256"`
+	FingerprintStatus string   `json:"fingerprintStatus"`
+	FingerprintError  string   `json:"fingerprintError"`
+	ParentID          string   `json:"parentId"`
+	Title             string   `json:"title"`
+	Author            string   `json:"author"`
+	Tags              []string `json:"tags"`
+	DurationSeconds   int      `json:"durationSeconds"`
+	Size              int64    `json:"size"`
+	Ext               string   `json:"ext"`
+	Quality           string   `json:"quality"`
+	ThumbnailURL      string   `json:"thumbnailUrl"`
+	PreviewFileID     string   `json:"previewFileId"`
+	PreviewLocal      string   `json:"previewLocal"`
+	PreviewStatus     string   `json:"previewStatus"`
 	// TranscodeStatus：浏览器兼容性转码状态。
 	// ''=未检测 / pending=已入队 / ready=已转码 / skipped=无需转码 / failed=失败。
-	TranscodeStatus  string `json:"transcodeStatus"`
-	TranscodeError   string `json:"transcodeError"`
-	TranscodedFileID string `json:"transcodedFileId"`
-	TranscodedSize   int64  `json:"transcodedSize"`
-	Views             int       `json:"views"`
-	Favorites         int       `json:"favorites"`
-	Comments          int       `json:"comments"`
-	Likes             int       `json:"likes"`
-	Dislikes          int       `json:"dislikes"`
-	Category          string    `json:"category"`
-	Hidden            bool      `json:"hidden"`
-	Badges            []string  `json:"badges"`
-	Description       string    `json:"description"`
-	PublishedAt       time.Time `json:"publishedAt"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	TranscodeStatus  string    `json:"transcodeStatus"`
+	TranscodeError   string    `json:"transcodeError"`
+	TranscodedFileID string    `json:"transcodedFileId"`
+	TranscodedSize   int64     `json:"transcodedSize"`
+	Views            int       `json:"views"`
+	Favorites        int       `json:"favorites"`
+	Comments         int       `json:"comments"`
+	Likes            int       `json:"likes"`
+	Dislikes         int       `json:"dislikes"`
+	Category         string    `json:"category"`
+	Hidden           bool      `json:"hidden"`
+	Badges           []string  `json:"badges"`
+	Description      string    `json:"description"`
+	PublishedAt      time.Time `json:"publishedAt"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
@@ -1531,160 +1531,6 @@ func cleanVideoIDs(ids []string) []string {
 		cleaned = append(cleaned, id)
 	}
 	return cleaned
-}
-
-func cleanTagLabels(labels []string) []string {
-	seen := make(map[string]struct{}, len(labels))
-	cleaned := make([]string, 0, len(labels))
-	for _, label := range labels {
-		label = strings.TrimSpace(label)
-		if label == "" {
-			continue
-		}
-		key := strings.ToLower(label)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		cleaned = append(cleaned, label)
-	}
-	return cleaned
-}
-
-func (c *Catalog) LeastPopulatedVisibleUniqueTag(ctx context.Context, labels []string) (string, error) {
-	cleaned := cleanTagLabels(labels)
-	bestLabel := ""
-	bestCount := 0
-	for _, label := range cleaned {
-		var count int
-		if err := c.db.QueryRowContext(ctx,
-			`SELECT COUNT(*)
-			   FROM videos
-			  WHERE COALESCE(hidden, 0) = 0
-			    AND `+activeDriveWhereSQL+`
-			    AND `+uniqueVideoWhereSQL+`
-			    AND EXISTS (
-			      SELECT 1
-			        FROM video_tags vt
-			        JOIN tags t ON t.id = vt.tag_id
-			       WHERE vt.video_id = videos.id
-			         AND t.label = ? COLLATE NOCASE
-			    )`,
-			label,
-		).Scan(&count); err != nil {
-			return "", err
-		}
-		if count == 0 {
-			continue
-		}
-		if bestLabel == "" || count < bestCount {
-			bestLabel = label
-			bestCount = count
-		}
-	}
-	return bestLabel, nil
-}
-
-func (c *Catalog) RandomVideosByTagExcluding(ctx context.Context, tag string, excludeIDs []string, limit int) ([]*Video, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-	tag = strings.TrimSpace(tag)
-	if tag == "" {
-		return nil, nil
-	}
-
-	cleaned := cleanVideoIDs(excludeIDs)
-	args := make([]any, 0, len(cleaned)+2)
-	args = append(args, tag)
-	whereSQL := `WHERE COALESCE(hidden, 0) = 0
-		           AND ` + activeDriveWhereSQL + `
-		           AND ` + uniqueVideoWhereSQL + `
-		           AND EXISTS (
-		             SELECT 1
-		               FROM video_tags vt
-		               JOIN tags t ON t.id = vt.tag_id
-		              WHERE vt.video_id = videos.id
-		                AND t.label = ? COLLATE NOCASE
-		           )`
-	if len(cleaned) > 0 {
-		placeholders := strings.Repeat("?,", len(cleaned))
-		placeholders = placeholders[:len(placeholders)-1]
-		whereSQL += " AND id NOT IN (" + placeholders + ")"
-		for _, id := range cleaned {
-			args = append(args, id)
-		}
-	}
-	args = append(args, limit)
-
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT `+allVideoCols+` FROM videos `+whereSQL+`
-		 ORDER BY RANDOM() LIMIT ?`,
-		args...,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []*Video
-	for rows.Next() {
-		v, err := scanVideo(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *Catalog) RandomVideosForPreferredVideoExcluding(ctx context.Context, preferredVideoID string, excludeIDs []string, limit int) ([]*Video, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-	preferredVideoID = strings.TrimSpace(preferredVideoID)
-	if preferredVideoID == "" {
-		return c.RandomVideosExcluding(ctx, excludeIDs, limit)
-	}
-
-	preferredExclude := append([]string{}, excludeIDs...)
-	preferredExclude = append(preferredExclude, preferredVideoID)
-
-	preferred, err := c.GetVideo(ctx, preferredVideoID)
-	if err != nil || preferred == nil || preferred.Hidden || len(preferred.Tags) == 0 {
-		return c.RandomVideosExcluding(ctx, preferredExclude, limit)
-	}
-	tag, err := c.LeastPopulatedVisibleUniqueTag(ctx, preferred.Tags)
-	if err != nil {
-		return nil, err
-	}
-	if tag == "" {
-		return c.RandomVideosExcluding(ctx, preferredExclude, limit)
-	}
-
-	items, err := c.RandomVideosByTagExcluding(ctx, tag, preferredExclude, limit)
-	if err != nil {
-		return nil, err
-	}
-	if len(items) >= limit {
-		return items, nil
-	}
-
-	mergedExclude := make([]string, 0, len(preferredExclude)+len(items))
-	mergedExclude = append(mergedExclude, preferredExclude...)
-	for _, item := range items {
-		if item != nil {
-			mergedExclude = append(mergedExclude, item.ID)
-		}
-	}
-	fallback, err := c.RandomVideosExcluding(ctx, mergedExclude, limit-len(items))
-	if err != nil {
-		return nil, err
-	}
-	return append(items, fallback...), nil
 }
 
 type DriveTeaserCounts struct {
