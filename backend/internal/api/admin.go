@@ -956,7 +956,7 @@ func (a *AdminServer) validateCrawlerUploadDrive(ctx context.Context, driveID st
 
 func isCrawlerUploadTargetKind(kind string) bool {
 	switch strings.TrimSpace(kind) {
-	case "p115", "pikpak", "p123", "googledrive", "onedrive", "wopan":
+	case "p115", "pikpak", "p123", "googledrive", "onedrive", "wopan", "guangyapan":
 		return true
 	default:
 		return false
