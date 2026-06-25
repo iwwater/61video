@@ -382,6 +382,10 @@ type App struct {
 	thumbWorkers       map[string]*preview.ThumbWorker
 	fingerprintWorkers map[string]*fingerprint.Worker
 	cancels            map[string]context.CancelFunc
+	// workerWGs 每个 driveID 一把 WaitGroup，追踪该 drive 三个 worker goroutine
+	// 是否全部退出。reset 时 cancel 老 ctx 后只 Wait() 自己的 goroutine，不阻塞
+	// 其他 drive 的工作。防止老 worker 还在写 log/metric 与新 worker 互相覆盖。
+	workerWGs map[string]*sync.WaitGroup
 	// scriptCrawlers 按 driveID 索引，每个脚本爬虫 drive 独立一个 Crawler。
 	// 内置 Spider91 也走这里，只是 SourceKind=spider91，以兼容历史 video id。
 	scriptCrawlers map[string]*scriptcrawler.Crawler
@@ -1188,11 +1192,25 @@ func generationCooldownForDrive(drv drives.Drive) time.Duration {
 func (a *App) startDriveGenerationWorkers(ctx context.Context, driveID string, drv drives.Drive, enqueue bool) {
 	worker, thumbWorker, fingerprintWorker := a.newDriveGenerationWorkers(drv)
 	workerCtx, cancel := context.WithCancel(ctx)
-	go worker.Run(workerCtx)
-	go thumbWorker.Run(workerCtx)
-	go fingerprintWorker.Run(workerCtx)
+	// 每 drive 一把 WG：Add(3) 在 lock 内做完，再起 goroutine；否则 race detector
+	// 会报 Add 和 Wait 之间的 data race。registerPreviewWorkersWithOptions 内部
+	// 也持 a.mu，我们靠它先建好 map 再交给 goroutine 持有引用。
+	wg := &sync.WaitGroup{}
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		worker.Run(workerCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		thumbWorker.Run(workerCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		fingerprintWorker.Run(workerCtx)
+	}()
 
-	a.registerPreviewWorkersWithOptions(workerCtx, driveID, worker, thumbWorker, fingerprintWorker, cancel, enqueue)
+	a.registerPreviewWorkersWithOptions(workerCtx, driveID, worker, thumbWorker, fingerprintWorker, cancel, enqueue, wg)
 }
 
 func (a *App) localUploadDir() string {
@@ -1356,10 +1374,13 @@ func (a *App) ensureScriptCrawlerNameTag(driveID, sourceKind, crawlerName string
 }
 
 func (a *App) registerPreviewWorkers(ctx context.Context, driveID string, worker *preview.Worker, thumbWorker *preview.ThumbWorker, fingerprintWorker *fingerprint.Worker, cancel context.CancelFunc) {
-	a.registerPreviewWorkersWithOptions(ctx, driveID, worker, thumbWorker, fingerprintWorker, cancel, true)
+	// 调用方未提供 WG：自己起一把。startDriveGenerationWorkers 会传自己的，
+	// 复用同一个 wg。
+	wg := &sync.WaitGroup{}
+	a.registerPreviewWorkersWithOptions(ctx, driveID, worker, thumbWorker, fingerprintWorker, cancel, true, wg)
 }
 
-func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID string, worker *preview.Worker, thumbWorker *preview.ThumbWorker, fingerprintWorker *fingerprint.Worker, cancel context.CancelFunc, enqueue bool) {
+func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID string, worker *preview.Worker, thumbWorker *preview.ThumbWorker, fingerprintWorker *fingerprint.Worker, cancel context.CancelFunc, enqueue bool, wg *sync.WaitGroup) {
 	a.mu.Lock()
 	if a.cancels == nil {
 		a.cancels = make(map[string]context.CancelFunc)
@@ -1372,6 +1393,9 @@ func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID str
 	}
 	if a.fingerprintWorkers == nil {
 		a.fingerprintWorkers = make(map[string]*fingerprint.Worker)
+	}
+	if a.workerWGs == nil {
+		a.workerWGs = make(map[string]*sync.WaitGroup)
 	}
 	if old, ok := a.cancels[driveID]; ok && old != nil {
 		old()
@@ -1395,6 +1419,11 @@ func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID str
 		a.cancels[driveID] = cancel
 	} else {
 		delete(a.cancels, driveID)
+	}
+	if wg != nil {
+		a.workerWGs[driveID] = wg
+	} else {
+		delete(a.workerWGs, driveID)
 	}
 	a.mu.Unlock()
 
@@ -1693,21 +1722,37 @@ func (a *App) resetDriveGenerationWorkers(ctx context.Context, driveID string) b
 		a.fingerprintWorkers[driveID] != nil ||
 		a.cancels[driveID] != nil
 	oldCancel := a.cancels[driveID]
+	oldWG := a.workerWGs[driveID]
 	a.mu.Unlock()
 
 	if attached && drv != nil {
+		// 老 workers 还在跑就先 cancel + 等它退出（仅等本 drive 的 WG），
+		// 否则起新的会和老的抢同一 driveID 的 cancel map / worker map，
+		// 且老 worker 写的 log / metric 会污染新 worker 的状态。
+		if oldCancel != nil {
+			oldCancel()
+			if oldWG != nil {
+				oldWG.Wait()
+			}
+		}
 		a.startDriveGenerationWorkers(ctx, driveID, drv, false)
 		return hadWorkers
 	}
 
 	if oldCancel != nil {
 		oldCancel()
+		// 等老 goroutine 退出再清 map，避免新挂载的同 ID worker 期间
+		// 老 worker 还在被 detached/clear 之后又被访问。
+		if oldWG != nil {
+			oldWG.Wait()
+		}
 	}
 	a.mu.Lock()
 	delete(a.workers, driveID)
 	delete(a.thumbWorkers, driveID)
 	delete(a.fingerprintWorkers, driveID)
 	delete(a.cancels, driveID)
+	delete(a.workerWGs, driveID)
 	a.mu.Unlock()
 	return hadWorkers
 }
