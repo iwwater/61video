@@ -382,7 +382,9 @@ export default function VideoDetailPage() {
               )}
             </div>
 
-            <RecommendedRail videos={detail.relatedVideos} />
+            {/* 右侧推荐视频不与音频场景契合（音频用户更关心队列/同专辑/同作者），
+                视频详情保留。 */}
+            {!isAudio && <RecommendedRail videos={detail.relatedVideos} />}
           </div>
         </div>
       </div>
