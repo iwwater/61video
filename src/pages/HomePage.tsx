@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { PromoStrip } from "@/components/PromoStrip";
 import { SearchPanel } from "@/components/SearchPanel";
 import { TagCloud } from "@/components/TagCloud";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -115,10 +114,10 @@ export default function HomePage() {
 
   return (
     <AppShell mobileAutoHideNav>
-      <ContinueWatchingRail videos={continueWatching} />
+      <ContinueWatchingRail videos={continueWatching} mediaType="video" />
+      <ContinueWatchingRail videos={continueWatching} mediaType="audio" />
 
       <div className="container page-section">
-        <PromoStrip />
         <SearchPanel />
         <TagCloud />
       </div>

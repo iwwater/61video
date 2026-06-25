@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
-import { PromoStrip } from "@/components/PromoStrip";
 import { SearchPanel } from "@/components/SearchPanel";
 import { TagCloud } from "@/components/TagCloud";
 import { SectionHeader } from "@/components/SectionHeader";
@@ -193,7 +192,6 @@ export default function ListingPage({ forcedMediaType }: { forcedMediaType?: Med
   return (
     <AppShell>
       <div className="container page-section">
-        <PromoStrip />
         <SearchPanel />
         <TagCloud />
       </div>

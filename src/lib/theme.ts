@@ -47,10 +47,6 @@ function isTheme(value: unknown): value is Theme {
   return value === "dark" || value === "pink" || value === "sky";
 }
 
-function isP1Theme(value: unknown): value is P1Theme {
-  return value === "light" || value === "dark" || value === "eyecare" || value === "green";
-}
-
 function applyLocalClass(theme: P1Theme): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;

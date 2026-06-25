@@ -1,6 +1,6 @@
 /* =========================================================
  * Layout
- * AppShell / Container / Hero / Section / Footer / Upload / BackToTop / PromoStrip
+ * AppShell / Container / Hero / Section / Footer / Upload / BackToTop
  * ========================================================= */
 .app-shell {
   display: flex;
@@ -66,122 +66,6 @@
   font-size: var(--font-sm);
   color: var(--text-faint);
   font-weight: var(--weight-regular);
-}
-
-/* =========================================================
- * Promo strip (P1 精选横栏)
- * 横滚 VideoCard 列表 + 左右箭头按钮
- * ========================================================= */
-.promo-strip {
-  position: relative;
-  margin-top: var(--space-4);
-  margin-left: calc(-1 * var(--container-pad-x));
-  margin-right: calc(-1 * var(--container-pad-x));
-  padding: 0 var(--container-pad-x);
-}
-
-.promo-strip__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0 0 var(--space-3);
-}
-
-.promo-strip__head-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.promo-strip__head-title {
-  flex: 1;
-  font-size: var(--font-xl);
-  font-weight: var(--weight-bold);
-  color: var(--text-strong);
-  letter-spacing: -0.005em;
-}
-
-.promo-strip__count {
-  font-size: var(--font-sm);
-  color: var(--text-faint);
-}
-
-.promo-strip__nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.promo-strip__nav-btn {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 1px solid var(--border-default);
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-  transition: color var(--transition-fast), background var(--transition-fast),
-    border-color var(--transition-fast), transform var(--transition-fast);
-}
-
-.promo-strip__nav-btn:hover:not(:disabled) {
-  color: var(--text-strong);
-  border-color: var(--border-accent);
-  background: var(--bg-surface);
-}
-
-.promo-strip__nav-btn:active:not(:disabled) {
-  transform: scale(0.92);
-}
-
-.promo-strip__nav-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.promo-strip__scroller {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(220px, 1fr);
-  gap: var(--space-4);
-  overflow-x: auto;
-  overflow-y: visible;
-  padding: 4px 0 14px;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-}
-
-.promo-strip__scroller::-webkit-scrollbar {
-  display: none;
-}
-
-.promo-strip__item {
-  scroll-snap-align: start;
-  min-width: 0;
-}
-
-@media (min-width: 768px) {
-  .promo-strip__scroller {
-    grid-auto-columns: minmax(260px, 1fr);
-  }
-}
-
-@media (min-width: 1200px) {
-  .promo-strip__scroller {
-    grid-auto-columns: minmax(280px, 1fr);
-  }
-}
-
-@media (max-width: 640px) {
-  .promo-strip__nav {
-    display: none;
-  }
 }
 
 /* ---- 旧版 .promo-card（4 宫格）样式保留以备后用 ---- */
