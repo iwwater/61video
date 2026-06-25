@@ -1,0 +1,93 @@
+/* PageLoading 加载占位组件的样式 */
+
+/* 旋转图标默认布局：垂直居中 */
+.page-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  min-height: 12rem;
+  padding: 2rem 1rem;
+  color: var(--color-text-muted, #a8adb8);
+}
+
+/* 行内（按钮内）只显示图标，不要撑起最小高度 */
+.page-loading--inline {
+  flex-direction: row;
+  min-height: 0;
+  padding: 0;
+  gap: 0.4rem;
+}
+
+.page-loading__spinner {
+  width: 2rem;
+  height: 2rem;
+  color: var(--color-primary, #3b82f6);
+  animation: page-loading-spin 1s linear infinite;
+}
+
+.page-loading--inline .page-loading__spinner {
+  width: 1rem;
+  height: 1rem;
+}
+
+.page-loading__label {
+  margin: 0;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+}
+
+@keyframes page-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* skeleton 骨架屏：脉冲式灰块 */
+.page-loading--skeleton {
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0.6rem;
+  padding: 1rem;
+  min-height: 6rem;
+}
+
+.page-loading__skeleton-row {
+  height: 1rem;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface, #1a1f29) 0%,
+    var(--color-surface-hover, #232936) 50%,
+    var(--color-surface, #1a1f29) 100%
+  );
+  background-size: 200% 100%;
+  animation: page-loading-shimmer 1.4s ease-in-out infinite;
+}
+
+.page-loading__skeleton-row--short {
+  width: 60%;
+}
+
+@keyframes page-loading-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* 屏幕阅读器专用文案（视觉隐藏但可被读出） */
+.page-loading__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

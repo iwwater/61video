@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { SkyStarfield } from "@/components/SkyStarfield";
+import { PageLoading } from "@/components/PageLoading";
 import { RequireAuth } from "@/admin/RequireAuth";
 
 const HomePage = lazy(() => import("@/pages/HomePage"));
@@ -67,7 +68,7 @@ export default function App() {
     <>
       {/* 星空蓝主题的固定位置星星层，仅在 data-theme="sky" 下可见 */}
       <SkyStarfield />
-      <Suspense fallback={null}>
+      <Suspense fallback={<PageLoading />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
 

@@ -20,6 +20,7 @@ import "./styles/parse-page.css";
 import "./styles/upload-page.css";
 import "./styles/parse-sources-page.css";
 import "./styles/error-boundary.css";
+import "./styles/page-loading.css";
 
 // 启动时和服务端对齐一次。失败也无所谓，index.html 已经从 localStorage
 // 设了一个合理初值。这里不 await，挂载和拉主题并行。
