@@ -493,7 +493,8 @@ export default function VideoDetailPage() {
 
 /**
  * 音频详情页下方的"队列"列表。
- * 显示当前曲目 ± 几条(2 前 + 7 后),让用户能直接跳到想听的那首。
+ * 渲染全部队列项 (滚动容器 max-height + overflow-y: auto 处理溢出),
+ * 当前曲目高亮,首次进入时自动滚到当前项。
  * 点击任一条 → 父组件 navigate 到 /video/<id> → 详情页重抓 → AudioPlayer 自动连播。
  */
 function AudioUpNext({
@@ -505,13 +506,13 @@ function AudioUpNext({
   currentIndex: number;
   onJump: (id: string) => void;
 }) {
-  const windowSize = 10;
-  const halfBefore = 2;
-  const start = Math.max(0, currentIndex - halfBefore);
-  const end = Math.min(queue.length, start + windowSize);
-  // 如果 start 已经被 clamp 到 0,把窗口尽量往后延,保证窗口填满
-  const adjustedStart = Math.max(0, end - windowSize);
-  const visible = queue.slice(adjustedStart, end);
+  const currentItemRef = useRef<HTMLLIElement | null>(null);
+  // 首次进入或 currentIndex 变化时,把当前项滚到容器可视区中
+  useEffect(() => {
+    const el = currentItemRef.current;
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "auto" });
+  }, [currentIndex]);
 
   return (
     <section className="vd-audio-upnext" aria-label="队列">
@@ -523,11 +524,12 @@ function AudioUpNext({
         </span>
       </header>
       <ul className="vd-audio-upnext__list">
-        {visible.map((v) => {
-          const isCurrent = v.id === queue[currentIndex]?.id;
+        {queue.map((v, idx) => {
+          const isCurrent = idx === currentIndex;
           return (
             <li
               key={v.id}
+              ref={isCurrent ? currentItemRef : undefined}
               className={`vd-audio-upnext__item${isCurrent ? " is-current" : ""}`}
             >
               <button
