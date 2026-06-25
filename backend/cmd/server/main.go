@@ -29,7 +29,6 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives"
-	"github.com/video-site/backend/internal/parsehealth"
 	"github.com/video-site/backend/internal/drives/googledrive"
 	"github.com/video-site/backend/internal/drives/guangyapan"
 	"github.com/video-site/backend/internal/drives/localstorage"
@@ -45,6 +44,7 @@ import (
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/nightly"
+	"github.com/video-site/backend/internal/parsehealth"
 	"github.com/video-site/backend/internal/preview"
 	"github.com/video-site/backend/internal/proxy"
 	"github.com/video-site/backend/internal/scanner"
@@ -1729,6 +1729,11 @@ func (a *App) resetDriveGenerationWorkers(ctx context.Context, driveID string) b
 		a.cancels[driveID] != nil
 	oldCancel := a.cancels[driveID]
 	oldWG := a.workerWGs[driveID]
+	delete(a.workers, driveID)
+	delete(a.thumbWorkers, driveID)
+	delete(a.fingerprintWorkers, driveID)
+	delete(a.cancels, driveID)
+	delete(a.workerWGs, driveID)
 	a.mu.Unlock()
 
 	if attached && drv != nil {
@@ -1753,13 +1758,6 @@ func (a *App) resetDriveGenerationWorkers(ctx context.Context, driveID string) b
 			oldWG.Wait()
 		}
 	}
-	a.mu.Lock()
-	delete(a.workers, driveID)
-	delete(a.thumbWorkers, driveID)
-	delete(a.fingerprintWorkers, driveID)
-	delete(a.cancels, driveID)
-	delete(a.workerWGs, driveID)
-	a.mu.Unlock()
 	return hadWorkers
 }
 
