@@ -3,25 +3,42 @@ import { History, Play } from "lucide-react";
 import type { VideoItem } from "@/types";
 import { formatCount } from "@/lib/format";
 
+type MediaFilter = "video" | "audio";
+
 type Props = {
   videos: VideoItem[];
+  /**
+   * 媒体类型过滤:不传则显示全部(标题 "继续观看");
+   * 传 "video" 显示视频(标题 "继续观看");"audio" 显示音频(标题 "继续收听")。
+   * 列表内容由父组件预先筛好;这里只在客户端按 mediaType 再过滤一次保险。
+   */
+  mediaType?: MediaFilter;
 };
 
+function pickRailTitle(filter: MediaFilter | undefined): { title: string; aria: string; unit: string } {
+  if (filter === "audio") return { title: "继续收听", aria: "继续收听", unit: "首" };
+  return { title: "继续观看", aria: "继续观看", unit: "部" };
+}
+
 /**
- * 首页顶部"继续观看" rail。看了一半的视频（5%~95%），按 progress_at 倒序。
- * 卡片底部带 1px 进度条，hover 缩略图右上角有 ▶ 图标提示"接着看"。
+ * 首页"继续观看/收听" rail。看了一半的媒体（5%~95%），按 progress_at 倒序。
+ * 卡片底部带 1px 进度条，hover 缩略图右上角有 ▶ 图标提示"接着看/听"。
  */
-export function ContinueWatchingRail({ videos }: Props) {
-  if (!videos || videos.length === 0) return null;
+export function ContinueWatchingRail({ videos, mediaType }: Props) {
+  const filtered = mediaType
+    ? videos.filter((v) => (v.mediaType ?? "video") === mediaType)
+    : videos;
+  if (!filtered || filtered.length === 0) return null;
+  const t = pickRailTitle(mediaType);
   return (
-    <section className="cw-rail" aria-label="继续观看">
+    <section className="cw-rail" aria-label={t.aria}>
       <header className="cw-rail__head">
         <History size={18} aria-hidden="true" />
-        <h2 className="cw-rail__title">继续观看</h2>
-        <span className="cw-rail__count">{videos.length} 部</span>
+        <h2 className="cw-rail__title">{t.title}</h2>
+        <span className="cw-rail__count">{filtered.length} {t.unit}</span>
       </header>
       <ul className="cw-rail__list">
-        {videos.map((v) => (
+        {filtered.map((v) => (
           <ContinueWatchingItem key={v.id} video={v} />
         ))}
       </ul>

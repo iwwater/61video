@@ -164,6 +164,117 @@
   display: block;
 }
 
+/* 队列控制：上一首 / 下一首 */
+.audio-player__nav {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.audio-player__nav-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.audio-player__nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.32);
+  color: #fff;
+}
+
+.audio-player__nav-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.audio-player__nav-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+/* 播放选项行：倍速 + 睡眠定时 (chip 按钮组) */
+.audio-player__extras {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.audio-player__speed,
+.audio-player__timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.audio-player__extras-label {
+  font-size: var(--font-sm);
+  color: rgba(255, 255, 255, 0.6);
+  margin-right: 2px;
+  user-select: none;
+}
+
+.audio-player__chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-player__chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+.audio-player__chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.audio-player__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.audio-player__timer-count {
+  margin-left: 4px;
+  font-size: var(--font-sm);
+  font-weight: var(--weight-bold);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
 :root[data-theme="pink"] .video-player {
   --video-player-progress: #ec4f86;
   --video-player-progress-loaded: rgba(236, 79, 134, 0.34);
@@ -1446,6 +1557,107 @@
 .vd-tag-editor__btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* ---------- Audio up-next (队列) ---------- */
+.vd-audio-upnext {
+  margin-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-4);
+}
+
+.vd-audio-upnext__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  color: var(--text-muted);
+}
+
+.vd-audio-upnext__title {
+  font-size: var(--font-md);
+  font-weight: var(--weight-bold);
+  color: var(--text-strong);
+  letter-spacing: 0;
+}
+
+.vd-audio-upnext__pos {
+  margin-left: auto;
+  font-size: var(--font-sm);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.vd-audio-upnext__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 360px;
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+}
+
+.vd-audio-upnext__item {
+  margin: 0;
+  padding: 0;
+}
+
+.vd-audio-upnext__btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-default);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.vd-audio-upnext__btn:hover {
+  background: var(--bg-elevated);
+}
+
+.vd-audio-upnext__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.vd-audio-upnext__item.is-current .vd-audio-upnext__btn {
+  background: var(--accent-soft);
+  color: var(--text-strong);
+  font-weight: var(--weight-medium);
+}
+
+.vd-audio-upnext__item.is-current .vd-audio-upnext__btn::before {
+  content: "▸";
+  color: var(--accent);
+  font-size: 12px;
+  margin-right: 4px;
+  flex: 0 0 auto;
+}
+
+.vd-audio-upnext__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-base);
+}
+
+.vd-audio-upnext__dur {
+  flex: 0 0 auto;
+  font-size: var(--font-sm);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- Recommended rail ---------- */

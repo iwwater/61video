@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { ListMusic } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { AudioPlayer } from "@/components/AudioPlayer";
@@ -9,12 +10,58 @@ import { VideoInfoPanel } from "@/components/VideoInfoPanel";
 import { RecommendedRail } from "@/components/RecommendedRail";
 import {
   deleteVideo,
+  fetchListing,
   fetchTags,
   fetchVideoDetail,
   recordView,
   updateVideoTags,
 } from "@/data/videos";
-import type { TagItem, VideoDetail } from "@/types";
+import type { TagItem, VideoDetail, VideoItem } from "@/types";
+
+// 队列持久化 + 循环模式:跨刷新保留
+const QUEUE_STORAGE_KEY = "audio-detail.queue.v1";
+const LOOP_STORAGE_KEY = "audio-player.loop";
+
+type SavedQueue = { currentId: string; items: VideoItem[] };
+
+function loadSavedQueue(): SavedQueue | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(QUEUE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      !parsed ||
+      typeof parsed.currentId !== "string" ||
+      !Array.isArray(parsed.items)
+    )
+      return null;
+    return parsed as SavedQueue;
+  } catch {
+    return null;
+  }
+}
+
+function saveQueue(currentId: string, items: VideoItem[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      QUEUE_STORAGE_KEY,
+      JSON.stringify({ currentId, items })
+    );
+  } catch {
+    // 容量满 / 隐私模式:放弃持久化,不影响内存队列使用。
+  }
+}
+
+type LoopMode = "off" | "all" | "one";
+
+function loadStoredLoop(): LoopMode {
+  if (typeof window === "undefined") return "off";
+  const raw = window.localStorage.getItem(LOOP_STORAGE_KEY);
+  if (raw === "off" || raw === "all" || raw === "one") return raw;
+  return "off";
+}
 
 export default function VideoDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -27,7 +74,45 @@ export default function VideoDetailPage() {
   const [deleteSource, setDeleteSource] = useState(false);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  // 音频队列:detail 是音频时拉一份 audio listing,作为上一首/下一首的导航数据
+  // 初次从 localStorage 还原(如果有),让刷新后队列还在
+  const [audioQueue, setAudioQueue] = useState<VideoItem[]>(
+    () => loadSavedQueue()?.items ?? []
+  );
+  // 循环模式
+  const [loopMode, setLoopMode] = useState<LoopMode>(loadStoredLoop);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LOOP_STORAGE_KEY, loopMode);
+    }
+  }, [loopMode]);
   const detailTopRef = useRef<HTMLDivElement | null>(null);
+
+  const isAudio = detail?.mediaType === "audio";
+  const audioIndex = useMemo(
+    () => (isAudio ? audioQueue.findIndex((v) => v.id === detail?.id) : -1),
+    [isAudio, audioQueue, detail?.id]
+  );
+  const hasPrevAudio = audioIndex > 0;
+  const hasNextAudio = audioIndex >= 0 && audioIndex < audioQueue.length - 1;
+
+  function jumpToAudioItem(targetId: string) {
+    navigate(`/video/${encodeURIComponent(targetId)}`);
+  }
+  function handlePrevAudio() {
+    if (!hasPrevAudio) return;
+    jumpToAudioItem(audioQueue[audioIndex - 1].id);
+  }
+  function handleNextAudio() {
+    if (hasNextAudio) {
+      jumpToAudioItem(audioQueue[audioIndex + 1].id);
+      return;
+    }
+    // 队列末尾:loopMode="all" 回到第一首;off/one 都停
+    if (loopMode === "all" && audioQueue.length > 0) {
+      jumpToAudioItem(audioQueue[0].id);
+    }
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -45,6 +130,30 @@ export default function VideoDetailPage() {
       active = false;
     };
   }, [id]);
+
+  // 音频:拉一份 audio listing 作为上下首队列。第一页 100 条对个人 ASMR 已够用,
+  // 不够再说(不预先实现"按需翻页"避免无谓复杂度)。
+  useEffect(() => {
+    if (!isAudio) {
+      setAudioQueue([]);
+      return;
+    }
+    let active = true;
+    fetchListing(1, 100, { mediaType: "audio" }).then((r) => {
+      if (!active) return;
+      setAudioQueue(r.items ?? []);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isAudio]);
+
+  // 队列持久化:每次队列或当前曲目变化时,写 localStorage。
+  // 失败(quota / 隐私模式)静默忽略,不影响内存使用。
+  useEffect(() => {
+    if (!isAudio || audioQueue.length === 0 || !detail?.id) return;
+    saveQueue(detail.id, audioQueue);
+  }, [isAudio, audioQueue, detail?.id]);
 
   useLayoutEffect(() => {
     if (loading || !detail) return;
@@ -223,7 +332,14 @@ export default function VideoDetailPage() {
                       src={detail.mediaSrc || detail.videoSrc}
                       poster={detail.poster}
                       title={detail.title}
-                      onFirstPlay={handleFirstPlay}
+                      hasPrev={hasPrevAudio}
+                      hasNext={hasNextAudio}
+                      onPrev={handlePrevAudio}
+                      onNext={handleNextAudio}
+                      onPlay={handleFirstPlay}
+                      onProgress={handleProgress}
+                      loopMode={loopMode}
+                      onLoopModeChange={setLoopMode}
                     />
                   ) : (
                     <VideoPlayer
@@ -256,6 +372,14 @@ export default function VideoDetailPage() {
                 tagSaving={tagSaving}
                 onTagsChange={handleTagsChange}
               />
+
+              {isAudio && audioIndex >= 0 && audioQueue.length > 1 && (
+                <AudioUpNext
+                  queue={audioQueue}
+                  currentIndex={audioIndex}
+                  onJump={jumpToAudioItem}
+                />
+              )}
             </div>
 
             <RecommendedRail videos={detail.relatedVideos} />
@@ -316,5 +440,63 @@ export default function VideoDetailPage() {
         </div>
       )}
     </AppShell>
+  );
+}
+
+/**
+ * 音频详情页下方的"队列"列表。
+ * 显示当前曲目 ± 几条(2 前 + 7 后),让用户能直接跳到想听的那首。
+ * 点击任一条 → 父组件 navigate 到 /video/<id> → 详情页重抓 → AudioPlayer 自动连播。
+ */
+function AudioUpNext({
+  queue,
+  currentIndex,
+  onJump,
+}: {
+  queue: VideoItem[];
+  currentIndex: number;
+  onJump: (id: string) => void;
+}) {
+  const windowSize = 10;
+  const halfBefore = 2;
+  const start = Math.max(0, currentIndex - halfBefore);
+  const end = Math.min(queue.length, start + windowSize);
+  // 如果 start 已经被 clamp 到 0,把窗口尽量往后延,保证窗口填满
+  const adjustedStart = Math.max(0, end - windowSize);
+  const visible = queue.slice(adjustedStart, end);
+
+  return (
+    <section className="vd-audio-upnext" aria-label="队列">
+      <header className="vd-audio-upnext__head">
+        <ListMusic size={16} aria-hidden="true" />
+        <span className="vd-audio-upnext__title">队列</span>
+        <span className="vd-audio-upnext__pos">
+          {currentIndex + 1} / {queue.length}
+        </span>
+      </header>
+      <ul className="vd-audio-upnext__list">
+        {visible.map((v) => {
+          const isCurrent = v.id === queue[currentIndex]?.id;
+          return (
+            <li
+              key={v.id}
+              className={`vd-audio-upnext__item${isCurrent ? " is-current" : ""}`}
+            >
+              <button
+                type="button"
+                className="vd-audio-upnext__btn"
+                onClick={() => onJump(v.id)}
+                aria-current={isCurrent ? "true" : undefined}
+              >
+                <span className="vd-audio-upnext__name">{v.title}</span>
+                {v.duration ? (
+                  <span className="vd-audio-upnext__dur">{v.duration}</span>
+                ) : null}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
