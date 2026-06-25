@@ -15,7 +15,6 @@ import "./styles/navigation.css";
 import "./styles/search.css";
 import "./styles/video-card.css";
 import "./styles/video-detail.css";
-import "./styles/admin.css";
 import "./styles/novel-reader.css";
 import "./styles/parse-page.css";
 import "./styles/upload-page.css";
