@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { PromoStrip } from "@/components/PromoStrip";
 import { SearchPanel } from "@/components/SearchPanel";
@@ -15,6 +15,8 @@ const PAGE_SIZE_DEFAULT = 24;
 const PAGE_SIZE_TAG = 12;
 const LISTING_STATE_PREFIX = "video-site:list-state:";
 
+type MediaType = "all" | "video" | "audio";
+
 type ListingState = {
   sort: SortKey;
   view: ViewMode;
@@ -22,14 +24,21 @@ type ListingState = {
   scrollY: number;
 };
 
-export default function ListingPage() {
-  const [params] = useSearchParams();
+function normalizeMediaType(value: string | null): MediaType {
+  if (value === "video" || value === "audio") return value;
+  return "all";
+}
+
+export default function ListingPage({ forcedMediaType }: { forcedMediaType?: MediaType } = {}) {
+  const [params, setParams] = useSearchParams();
   const keyword = params.get("q") ?? "";
   const tag = params.get("tag") ?? "";
   const cat = params.get("cat") ?? "";
+  const urlMediaType = normalizeMediaType(params.get("type"));
+  const mediaType: MediaType = forcedMediaType ?? urlMediaType;
   const listKey = useMemo(
-    () => listingStateKey({ keyword, tag, cat }),
-    [keyword, tag, cat]
+    () => listingStateKey({ keyword, tag, cat, mediaType }),
+    [keyword, tag, cat, mediaType]
   );
   const initialState = useMemo(() => readListingState(listKey), [listKey]);
   const activeListKeyRef = useRef(listKey);
@@ -59,12 +68,14 @@ export default function ListingPage() {
 
   useEffect(() => {
     document.title = keyword
-      ? `搜索 "${keyword}" · 91`
+      ? `搜索 "${keyword}" · 61`
       : tag
-      ? `标签 ${tag} · 91`
+      ? `标签 ${tag} · 61`
       : cat
-      ? `分类 ${cat} · 91`
-      : "视频列表 · 91";
+      ? `分类 ${cat} · 61`
+      : mediaType === "audio"
+      ? "音频列表 · 61"
+      : "视频列表 · 61";
 
     let active = true;
     const isInitialLoad = !hasLoadedListingRef.current;
@@ -73,7 +84,13 @@ export default function ListingPage() {
     } else {
       setRefreshing(true);
     }
-    fetchListing(page, tag ? PAGE_SIZE_TAG : PAGE_SIZE_DEFAULT, { q: keyword, tag, cat, sort }).then((r) => {
+    fetchListing(page, tag ? PAGE_SIZE_TAG : PAGE_SIZE_DEFAULT, {
+      q: keyword,
+      tag,
+      cat,
+      mediaType,
+      sort,
+    }).then((r) => {
       if (!active) return;
       setItems(r.items ?? []);
       setTotal(r.total ?? 0);
@@ -84,7 +101,7 @@ export default function ListingPage() {
     return () => {
       active = false;
     };
-  }, [keyword, tag, cat, sort, page]);
+  }, [keyword, tag, cat, mediaType, sort, page]);
 
   useEffect(() => {
     const previous = window.history.scrollRestoration;
@@ -136,7 +153,20 @@ export default function ListingPage() {
     ? `标签：${tag}`
     : cat && cat !== "all"
     ? `分类：${cat}`
+    : mediaType === "audio"
+    ? "音频"
     : "全部视频";
+
+  function setMediaType(next: MediaType) {
+    if (next === mediaType) return;
+    const updated = new URLSearchParams(params);
+    if (next === "all") {
+      updated.delete("type");
+    } else {
+      updated.set("type", next);
+    }
+    setParams(updated, { replace: true });
+  }
 
   return (
     <AppShell>
@@ -147,7 +177,41 @@ export default function ListingPage() {
       </div>
 
       <div className="container page-section">
-        <SectionHeader title={title} extra={`共 ${total} 个视频`} />
+        <div className="list-type-tabs" role="tablist" aria-label="媒体类型">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mediaType === "all"}
+            className={`list-type-tab ${mediaType === "all" ? "is-active" : ""}`}
+            onClick={() => setMediaType("all")}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mediaType === "video"}
+            className={`list-type-tab ${mediaType === "video" ? "is-active" : ""}`}
+            onClick={() => setMediaType("video")}
+          >
+            视频
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mediaType === "audio"}
+            className={`list-type-tab ${mediaType === "audio" ? "is-active" : ""}`}
+            onClick={() => setMediaType("audio")}
+          >
+            音频
+          </button>
+          {mediaType === "audio" && (
+            <Link to="/audio" className="list-type-tab__permalink" aria-label="音频独立页面">
+              /audio
+            </Link>
+          )}
+        </div>
+        <SectionHeader title={title} extra={`共 ${total} 个`} />
         <SortToolbar
           sort={sort}
           view={view}
@@ -166,7 +230,9 @@ export default function ListingPage() {
           loading={initialLoading}
           compact={view === "compact"}
           skeletonCount={12}
-          emptyText="没有找到匹配的视频"
+          emptyText={
+            mediaType === "audio" ? "没有找到匹配的音频" : "没有找到匹配的视频"
+          }
         />
         <Pagination
           page={page}
@@ -187,11 +253,13 @@ function listingStateKey(filters: {
   keyword: string;
   tag: string;
   cat: string;
+  mediaType: MediaType;
 }): string {
   const params = new URLSearchParams();
   if (filters.keyword) params.set("q", filters.keyword);
   if (filters.tag) params.set("tag", filters.tag);
   if (filters.cat) params.set("cat", filters.cat);
+  if (filters.mediaType !== "all") params.set("type", filters.mediaType);
   return `${LISTING_STATE_PREFIX}${params.toString()}`;
 }
 

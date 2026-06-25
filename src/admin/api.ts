@@ -639,6 +639,101 @@ export function regenPreview(id: string) {
   );
 }
 
+// ---------- Image Sets ----------
+
+export type AdminImageSet = {
+  id: string;
+  driveId: string;
+  sourceId: string;
+  title: string;
+  author: string;
+  coverUrl: string;
+  imageCount: number;
+  tags: string[];
+  description: string;
+  hidden: boolean;
+  sourceKind: string;
+  publishedAt: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type AdminImageSetList = {
+  items: AdminImageSet[];
+  total: number;
+  page: number;
+  size: number;
+};
+
+export function listAdminImageSets(
+  params: { page?: number; size?: number; keyword?: string } = {}
+) {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set("page", String(params.page));
+  if (params.size) qs.set("size", String(params.size));
+  if (params.keyword) qs.set("keyword", params.keyword);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<AdminImageSetList>(`/image-sets${suffix}`);
+}
+
+export function deleteImageSet(id: string, options: { deleteSource?: boolean } = {}) {
+  return request<{ ok: boolean; deletedSource: boolean }>(
+    `/image-sets/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ deleteSource: !!options.deleteSource }),
+    }
+  );
+}
+
+// ---------- Novels ----------
+
+export type AdminNovelSet = {
+  id: string;
+  driveId: string;
+  sourceId: string;
+  title: string;
+  author: string;
+  coverUrl: string;
+  contentType: string;
+  chapterCount: number;
+  tags: string[];
+  description: string;
+  hidden: boolean;
+  sourceKind: string;
+  publishedAt: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type AdminNovelSetList = {
+  items: AdminNovelSet[];
+  total: number;
+  page: number;
+  size: number;
+};
+
+export function listAdminNovels(
+  params: { page?: number; size?: number; keyword?: string } = {}
+) {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set("page", String(params.page));
+  if (params.size) qs.set("size", String(params.size));
+  if (params.keyword) qs.set("keyword", params.keyword);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<AdminNovelSetList>(`/novels${suffix}`);
+}
+
+export function deleteNovelSet(id: string, options: { deleteSource?: boolean } = {}) {
+  return request<{ ok: boolean; deletedSource: boolean }>(
+    `/novels/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ deleteSource: !!options.deleteSource }),
+    }
+  );
+}
+
 // ---------- Tags ----------
 
 export type AdminTag = {
@@ -665,6 +760,20 @@ export function deleteTag(id: number) {
     `/tags/${encodeURIComponent(String(id))}`,
     { method: "DELETE" }
   );
+}
+
+// System 标签（后台可编辑的"分类标签"，对应后端 settings.system_tags）
+export type SystemTag = { label: string; aliases: string[] };
+
+export function getSystemTags() {
+  return request<SystemTag[]>("/tags/system");
+}
+
+export function putSystemTags(tags: SystemTag[]) {
+  return request<{ ok: boolean; count: number }>("/tags/system", {
+    method: "PUT",
+    body: JSON.stringify(tags),
+  });
 }
 
 // ---------- Settings ----------
@@ -702,7 +811,7 @@ export function updateSettings(body: Partial<Settings>) {
 // ---------- Jobs ----------
 
 /**
- * 立即触发一次完整的凌晨流水线（Phase1 扫盘 + Phase2 91 爬虫 + Phase3 迁移），
+ * 立即触发一次完整的凌晨流水线（Phase1 扫盘 + Phase2 61 爬虫 + Phase3 迁移），
  * 不论当前时间或今日是否已跑。立即返回 202；进度通过任务状态和 backend 日志观察。
  *
  * 流水线已在跑或已排队时，后端会拒绝重复触发。
@@ -731,4 +840,93 @@ export function stopAllTasks() {
     "/tasks/stop",
     { method: "POST" }
   );
+}
+
+// ---------- 影视解析/搜索源 ----------
+
+export type ParseSource = {
+  id: string;
+  name: string;
+  kind: "search" | "parse" | "both" | "iframe" | "iframe-search";
+  searchUrl: string;
+  parseUrl: string;
+  enabled: boolean;
+  sort: number;
+  note: string;
+  createdAt: number;
+  updatedAt: number;
+  lastHealthStatus?: "ok" | "fail" | "";
+  lastHealthAt?: number;
+  lastHealthError?: string;
+  lastHealthResponseMs?: number;
+};
+
+export function listParseSources() {
+  return request<{ items: ParseSource[] }>("/parse-sources");
+}
+
+export function upsertParseSource(input: {
+  id: string;
+  name: string;
+  kind: ParseSource["kind"];
+  searchUrl: string;
+  parseUrl: string;
+  enabled?: boolean;
+  sort?: number;
+  note?: string;
+}) {
+  return request<ParseSource>("/parse-sources", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteParseSource(id: string) {
+  return request<{ ok: boolean }>(`/parse-sources/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function runHealthCheck() {
+  return request<{ ok: boolean }>("/parse-sources/health/check", {
+    method: "POST",
+  });
+}
+
+// 资源站（行业标准 JSON API）
+export type ResourceSite = {
+  id: string;
+  name: string;
+  apiUrl: string;
+  playUrlMode: "first" | "direct" | "detail";
+  enabled: boolean;
+  sort: number;
+  note: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export function listResourceSites() {
+  return request<{ items: ResourceSite[] }>("/resource-sites");
+}
+
+export function upsertResourceSite(input: {
+  id: string;
+  name: string;
+  apiUrl: string;
+  playUrlMode?: ResourceSite["playUrlMode"];
+  enabled?: boolean;
+  sort?: number;
+  note?: string;
+}) {
+  return request<ResourceSite>("/resource-sites", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteResourceSite(id: string) {
+  return request<{ ok: boolean }>(`/resource-sites/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }

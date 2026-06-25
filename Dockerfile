@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python3 -c "import requests, bs4, lxml, socks"
 
-WORKDIR /opt/video-site-91
+WORKDIR /opt/video-site-61
 
 COPY --from=backend /out/server ./server
 COPY --from=frontend /app/dist ./dist
@@ -52,17 +52,17 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 ARG VERSION=dev
 
-ENV VIDEO_CONFIG=/opt/video-site-91/data/config.yaml \
-    VIDEO_FRONTEND_DIR=/opt/video-site-91/dist \
-    VIDEO_GITHUB_REPO=nianzhibai/91 \
+ENV VIDEO_CONFIG=/opt/video-site-61/data/config.yaml \
+    VIDEO_FRONTEND_DIR=/opt/video-site-61/dist \
+    VIDEO_GITHUB_REPO=iwwater/61video \
     VIDEO_IMAGE_VERSION=${VERSION} \
-    VIDEO_LISTEN_PORT=9191 \
-    VIDEO_VERSION_FILE=/opt/video-site-91/data/.version
+    VIDEO_LISTEN_PORT=6191 \
+    VIDEO_VERSION_FILE=/opt/video-site-61/data/.version
 
 RUN chmod +x ./server /usr/local/bin/docker-entrypoint.sh
 
-VOLUME ["/opt/video-site-91/data"]
-EXPOSE 9191
+VOLUME ["/opt/video-site-61/data"]
+EXPOSE 6191
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["./server"]

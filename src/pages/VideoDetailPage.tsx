@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { VideoPlayer } from "@/components/VideoPlayer";
+import { AudioPlayer } from "@/components/AudioPlayer";
 import { VideoActions } from "@/components/VideoActions";
 import { VideoMetaHeader } from "@/components/VideoMetaHeader";
 import { VideoInfoPanel } from "@/components/VideoInfoPanel";
@@ -38,7 +39,7 @@ export default function VideoDetailPage() {
       setDetail(d);
       setTags(tagList);
       setLoading(false);
-      document.title = d ? `${d.title} · 91` : "视频不存在";
+      document.title = d ? `${d.title} · 61` : "视频不存在";
     });
     return () => {
       active = false;
@@ -100,6 +101,21 @@ export default function VideoDetailPage() {
     if (!detail) return;
     // 失败静默忽略，不打扰用户播放体验
     recordView(detail.id).catch(() => undefined);
+  }
+
+  // 续播：每 ~5s 上报一次 currentTime。失败静默。
+  const lastReportedRef = useRef(0);
+  function handleProgress(seconds: number) {
+    if (!detail) return;
+    // 简单节流：值变化 >= 3s 才报一次
+    if (Math.abs(seconds - lastReportedRef.current) < 3) return;
+    lastReportedRef.current = seconds;
+    fetch(`/api/video/${encodeURIComponent(detail.id)}/progress`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seconds }),
+    }).catch(() => undefined);
   }
 
   if (loading) {
@@ -202,14 +218,25 @@ export default function VideoDetailPage() {
             <div className="vd-main" ref={detailTopRef}>
               <div className="vd-player-wrap">
                 <div className="vd-player">
-                  <VideoPlayer
-                    id={detail.id}
-                    src={detail.videoSrc}
-                    poster={detail.poster}
-                    previewSrc={detail.previewSrc}
-                    title={detail.title}
-                    onFirstPlay={handleFirstPlay}
-                  />
+                  {detail.mediaType === "audio" ? (
+                    <AudioPlayer
+                      src={detail.mediaSrc || detail.videoSrc}
+                      poster={detail.poster}
+                      title={detail.title}
+                      onFirstPlay={handleFirstPlay}
+                    />
+                  ) : (
+                    <VideoPlayer
+                      id={detail.id}
+                      src={detail.mediaSrc || detail.videoSrc}
+                      poster={detail.poster}
+                      previewSrc={detail.previewSrc}
+                      title={detail.title}
+                      initialTime={detail.progressSeconds}
+                      onFirstPlay={handleFirstPlay}
+                      onProgress={handleProgress}
+                    />
+                  )}
                 </div>
               </div>
 

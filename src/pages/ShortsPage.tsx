@@ -515,7 +515,7 @@ export default function ShortsPage() {
   );
 
   useEffect(() => {
-    document.title = "短视频 · 91";
+    document.title = "短视频 · 61";
   }, []);
 
   // 沉浸式：默认锁住 body 滚动；iPhone 浏览器里放开根页面滚动，让 Safari 工具栏能随刷动收起。

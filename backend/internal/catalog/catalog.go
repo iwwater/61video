@@ -11,13 +11,18 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/video-site/backend/internal/fixedtags"
+	"github.com/video-site/backend/internal/mediatype"
+	"github.com/video-site/backend/internal/systemtags"
 )
 
 //go:embed schema.sql
 var schemaSQL string
 
 type Catalog struct {
-	db *sql.DB
+	db         *sql.DB
+	systemTags *systemtags.Store
 }
 
 type CrawlerAssetCounts struct {
@@ -38,15 +43,58 @@ func Open(path string) (*Catalog, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	c := &Catalog{db: db}
+	c := &Catalog{db: db, systemTags: systemtags.NewStore()}
 	if err := c.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate catalog: %w", err)
+	}
+	// 首次启动注入默认资源站预设（仅当 resource_sites 表为空时执行）
+	if err := c.SeedDefaultResourceSites(context.Background()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("seed default resource sites: %w", err)
 	}
 	return c, nil
 }
 
 func (c *Catalog) Close() error { return c.db.Close() }
+
+// InitSystemTags 从 settings 表加载 system 标签集合到内存；main 启动时调一次。
+func (c *Catalog) InitSystemTags(ctx context.Context) error {
+	if c.systemTags == nil {
+		c.systemTags = systemtags.NewStore()
+	}
+	return c.systemTags.Load(ctx, c.db)
+}
+
+// SystemTags 返回内存里的 system 标签集合（用于后台展示/编辑）。
+func (c *Catalog) SystemTags() []systemtags.Tag {
+	if c.systemTags == nil {
+		return nil
+	}
+	return c.systemTags.Snapshot()
+}
+
+// ReplaceSystemTags 后台编辑器调用：写库 + 刷新内存。
+func (c *Catalog) ReplaceSystemTags(ctx context.Context, tags []systemtags.Tag) error {
+	if c.systemTags == nil {
+		c.systemTags = systemtags.NewStore()
+	}
+	if err := systemtags.Save(ctx, c.db, tags); err != nil {
+		return err
+	}
+	c.systemTags.Replace(tags)
+	return nil
+}
+
+// avAliases 返回 "AV" 这个 system 标签的别名。用户可能删掉它,所以 fallback 到 fixedtags。
+func (c *Catalog) avAliases() []string {
+	if c.systemTags != nil {
+		if a := c.systemTags.AliasesFor(avTagLabel); len(a) > 0 {
+			return a
+		}
+	}
+	return fixedtags.AliasesFor(avTagLabel)
+}
 
 // ---------- Video ----------
 
@@ -66,6 +114,7 @@ type Video struct {
 	DurationSeconds   int      `json:"durationSeconds"`
 	Size              int64    `json:"size"`
 	Ext               string   `json:"ext"`
+	MediaType         string   `json:"mediaType"`
 	Quality           string   `json:"quality"`
 	ThumbnailURL      string   `json:"thumbnailUrl"`
 	PreviewFileID     string   `json:"previewFileId"`
@@ -79,6 +128,8 @@ type Video struct {
 	TranscodedSize   int64     `json:"transcodedSize"`
 	Views            int       `json:"views"`
 	LastViewedAt     time.Time `json:"lastViewedAt"`
+	ProgressSeconds  float64   `json:"progressSeconds"`
+	ProgressAt       time.Time `json:"progressAt"`
 	Favorites        int       `json:"favorites"`
 	Comments         int       `json:"comments"`
 	Likes            int       `json:"likes"`
@@ -96,6 +147,7 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	existed := c.videoExists(ctx, v.ID)
 	v.ContentHash = normalizeContentHash(v.ContentHash)
 	v.SampledSHA256 = normalizeContentHash(v.SampledSHA256)
+	v.MediaType = mediatype.Normalize(v.MediaType)
 	fingerprintStatus := nullableStatus(v.FingerprintStatus)
 	if v.SampledSHA256 != "" && (v.FingerprintStatus == "" || v.FingerprintStatus == "pending") {
 		fingerprintStatus = "ready"
@@ -111,13 +163,13 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	_, err := c.db.ExecContext(ctx, `
 INSERT INTO videos (
   id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, title, author, tags,
-  duration_seconds, size_bytes, ext, quality, thumbnail_url, thumbnail_status,
+  duration_seconds, size_bytes, ext, media_type, quality, thumbnail_url, thumbnail_status,
   preview_file_id, preview_local, preview_status,
   views, last_viewed_at, favorites, comments, likes, dislikes,
   category, hidden, badges, description, published_at, created_at, updated_at
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
+  ?, ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
   ?, ?, ?,
   ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?
@@ -152,6 +204,7 @@ ON CONFLICT(id) DO UPDATE SET
   duration_seconds= excluded.duration_seconds,
   size_bytes      = excluded.size_bytes,
   ext             = excluded.ext,
+  media_type      = excluded.media_type,
   quality         = excluded.quality,
   thumbnail_url   = excluded.thumbnail_url,
   -- thumbnail_url 写非空就意味着文件已就绪（要么 worker 抽帧填的本地 /p/thumb/<id>，
@@ -168,7 +221,7 @@ ON CONFLICT(id) DO UPDATE SET
   updated_at      = excluded.updated_at
 `,
 		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, v.Title, v.Author, string(tagsJSON),
-		v.DurationSeconds, v.Size, v.Ext, v.Quality, v.ThumbnailURL, v.ThumbnailURL,
+		v.DurationSeconds, v.Size, v.Ext, v.MediaType, v.Quality, v.ThumbnailURL, v.ThumbnailURL,
 		v.PreviewFileID, v.PreviewLocal, nullableStatus(v.PreviewStatus),
 		v.Views, unixMilliOrZero(v.LastViewedAt), v.Favorites, v.Comments, v.Likes, v.Dislikes,
 		v.Category, boolToInt(v.Hidden), string(badgesJSON), v.Description,
@@ -201,7 +254,8 @@ func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status st
 // mp4/webm/m4v 默认浏览器可播不进候选；strm 是远程引用没有本体。
 // 其余扩展名都先入候选，由转码 worker probe 实际编码后决定转码还是跳过
 // （skipped）。failed 也保留在候选里，重新点开始转码时会自动重试。
-const transcodeCandidateWhereSQL = `COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
+const transcodeCandidateWhereSQL = `COALESCE(media_type, 'video') = 'video'
+	AND COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
 	AND COALESCE(transcode_status, '') IN ('', 'pending', 'failed')`
 
 // ListTranscodeCandidates 列出某盘所有转码候选视频。limit<=0 表示不限制。
@@ -252,11 +306,15 @@ type DriveTranscodeCounts struct {
 func (c *Catalog) CountTranscodesByDrive(ctx context.Context) (map[string]DriveTranscodeCounts, error) {
 	rows, err := c.db.QueryContext(ctx, `
 		SELECT drive_id,
-		        COUNT(CASE WHEN COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                    AND COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
 		                    AND COALESCE(transcode_status, '') IN ('', 'pending') THEN 1 END) AS pending_count,
-		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'ready' THEN 1 END) AS ready_count,
-		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'failed' THEN 1 END) AS failed_count,
-		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'skipped' THEN 1 END) AS skipped_count
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                    AND COALESCE(transcode_status, '') = 'ready' THEN 1 END) AS ready_count,
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                    AND COALESCE(transcode_status, '') = 'failed' THEN 1 END) AS failed_count,
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                    AND COALESCE(transcode_status, '') = 'skipped' THEN 1 END) AS skipped_count
 		  FROM videos
 		 GROUP BY drive_id`)
 	if err != nil {
@@ -417,6 +475,62 @@ func (c *Catalog) DecrementLike(ctx context.Context, id string) (int, error) {
 	return likes, nil
 }
 
+// UpdateProgress 原子更新观看进度（秒）。视频不存在时返回 sql.ErrNoRows。
+// 客户端应每 5-10 秒调一次；duration 在调用方知道，这里只存"播到哪里"。
+func (c *Catalog) UpdateProgress(ctx context.Context, id string, seconds float64) error {
+	res, err := c.db.ExecContext(ctx,
+		`UPDATE videos SET progress_seconds = ?, progress_at = ?, last_viewed_at = ?, updated_at = ? WHERE id = ?`,
+		seconds, time.Now().UnixMilli(), time.Now().UnixMilli(), time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// ListContinueWatching 取最近 10 部"看了一半"的视频：progress_seconds 在
+// duration 的 [5%, 95%) 区间内，按 progress_at DESC 排。
+func (c *Catalog) ListContinueWatching(ctx context.Context, limit int) ([]*Video, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT id, drive_id, file_id, file_name, content_hash, sampled_sha256,
+		       fingerprint_status, fingerprint_error, parent_id, title, author,
+		       COALESCE(tags, '[]'),
+		       duration_seconds, size_bytes, ext, media_type, quality,
+		       thumbnail_url, preview_file_id, preview_local, preview_status,
+		       transcode_status, transcode_error, transcoded_file_id, transcoded_size,
+		       views, last_viewed_at, progress_seconds, progress_at,
+		       favorites, comments, likes, dislikes, category, hidden,
+		       COALESCE(badges, '[]'), description, published_at, created_at, updated_at
+		FROM videos
+		WHERE progress_seconds > 0
+		  AND duration_seconds > 0
+		  AND progress_seconds < duration_seconds * 0.95
+		  AND progress_seconds >= duration_seconds * 0.05
+		  AND COALESCE(hidden, 0) = 0
+		ORDER BY progress_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // IncrementView 原子 +1，返回最新观看数。视频不存在时返回 sql.ErrNoRows。
 func (c *Catalog) IncrementView(ctx context.Context, id string) (int, error) {
 	tx, err := c.db.BeginTx(ctx, nil)
@@ -459,6 +573,7 @@ type VideoMetaPatch struct {
 	AuthorSet              bool
 	Tags                   []string
 	TagsSet                bool
+	MediaType              string
 }
 
 func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPatch) error {
@@ -518,6 +633,10 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 		tagsJSON, _ := json.Marshal(p.Tags)
 		parts = append(parts, "tags = ?")
 		args = append(args, string(tagsJSON))
+	}
+	if p.MediaType != "" {
+		parts = append(parts, "media_type = ?")
+		args = append(args, p.MediaType)
 	}
 	if len(parts) == 0 {
 		return nil
@@ -629,6 +748,7 @@ func (c *Catalog) ListVideosByPreviewStatus(ctx context.Context, driveID, status
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT `+allVideoCols+` FROM videos
 		 WHERE drive_id = ? AND preview_status = ?
+		   AND COALESCE(media_type, 'video') = 'video'
 		   AND COALESCE(hidden, 0) = 0
 		   AND `+uniqueVideoWhereSQL+`
 		 ORDER BY created_at ASC LIMIT ?`,
@@ -660,6 +780,7 @@ func (c *Catalog) ListVideosByThumbnailStatus(ctx context.Context, driveID, stat
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT `+allVideoCols+` FROM videos
 		 WHERE drive_id = ? AND COALESCE(thumbnail_status, 'pending') = ?
+		   AND COALESCE(media_type, 'video') = 'video'
 		   AND COALESCE(hidden, 0) = 0
 		   AND `+uniqueVideoWhereSQL+`
 		 ORDER BY created_at ASC LIMIT ?`,
@@ -694,6 +815,7 @@ func (c *Catalog) ListVideosNeedingThumbnail(ctx context.Context, driveID string
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT `+allVideoCols+` FROM videos
 		 WHERE drive_id = ?
+		   AND COALESCE(media_type, 'video') = 'video'
 		   AND (
 		        COALESCE(thumbnail_url, '') = ''
 		        OR COALESCE(duration_seconds, 0) <= 0
@@ -724,6 +846,7 @@ func (c *Catalog) CountVideosNeedingThumbnail(ctx context.Context, driveID strin
 	err := c.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM videos
 		 WHERE drive_id = ?
+		   AND COALESCE(media_type, 'video') = 'video'
 		   AND (
 		        COALESCE(thumbnail_url, '') = ''
 		        OR COALESCE(duration_seconds, 0) <= 0
@@ -1366,6 +1489,9 @@ type ListParams struct {
 	DriveID               string
 	Tag                   string
 	Category              string
+	// MediaType 过滤媒体类型。空 = 不限；取值 "video" / "audio"。
+	// 任意非法值按不限处理。
+	MediaType             string
 	Sort                  string // latest | hot | recent
 	ThumbnailReadyOnly    bool
 	PreferReadyThumbnails bool
@@ -1400,6 +1526,10 @@ func (c *Catalog) ListVideos(ctx context.Context, p ListParams) ([]*Video, int, 
 	if p.Category != "" && p.Category != "all" {
 		where = append(where, "category = ?")
 		args = append(args, p.Category)
+	}
+	if mt := mediatype.NormalizeListFilter(p.MediaType); mt != "" {
+		where = append(where, "COALESCE(media_type, 'video') = ?")
+		args = append(args, mt)
 	}
 	if p.ThumbnailReadyOnly {
 		where = append(where, "COALESCE(thumbnail_url, '') != ''")
@@ -1455,13 +1585,15 @@ func (c *Catalog) ListVideos(ctx context.Context, p ListParams) ([]*Video, int, 
 
 // CountVisibleVideos 返回当前对前台可见的视频总数（未隐藏、且通过去重规则）。
 // 用于短视频模式判断"已经轮过一遍"。
+// 短视频只算视频，不算音频。
 func (c *Catalog) CountVisibleVideos(ctx context.Context) (int, error) {
 	var total int
 	err := c.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM videos
 		  WHERE COALESCE(hidden, 0) = 0
 		    AND `+activeDriveWhereSQL+`
-		    AND `+uniqueVideoWhereSQL,
+		    AND `+uniqueVideoWhereSQL+`
+		    AND (media_type IS NULL OR media_type = '' OR media_type = 'video')`,
 	).Scan(&total)
 	if err != nil {
 		return 0, err
@@ -1490,7 +1622,8 @@ func (c *Catalog) randomVideosExcluding(ctx context.Context, excludeIDs []string
 	args := make([]any, 0, len(cleaned)+1)
 	whereSQL := `WHERE COALESCE(hidden, 0) = 0
 		           AND ` + activeDriveWhereSQL + `
-		           AND ` + uniqueVideoWhereSQL
+		           AND ` + uniqueVideoWhereSQL + `
+		           AND (media_type IS NULL OR media_type = '' OR media_type = 'video')`
 	if thumbnailReadyOnly {
 		whereSQL += " AND COALESCE(thumbnail_url, '') != ''"
 	}
@@ -1567,9 +1700,12 @@ type DriveFingerprintCounts struct {
 func (c *Catalog) CountTeasersByDrive(ctx context.Context) (map[string]DriveTeaserCounts, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT drive_id,
-		        COUNT(CASE WHEN COALESCE(preview_status, 'pending') = 'ready' THEN 1 END) AS ready_count,
-		        COUNT(CASE WHEN COALESCE(preview_status, 'pending') = 'pending' THEN 1 END) AS pending_count,
-		        COUNT(CASE WHEN COALESCE(preview_status, 'pending') = 'failed' THEN 1 END) AS failed_count
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                     AND COALESCE(preview_status, 'pending') = 'ready' THEN 1 END) AS ready_count,
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                     AND COALESCE(preview_status, 'pending') = 'pending' THEN 1 END) AS pending_count,
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                     AND COALESCE(preview_status, 'pending') = 'failed' THEN 1 END) AS failed_count
 		   FROM videos
 		  WHERE COALESCE(hidden, 0) = 0
 		    AND `+uniqueVideoWhereSQL+`
@@ -1597,12 +1733,16 @@ func (c *Catalog) CountTeasersByDrive(ctx context.Context) (map[string]DriveTeas
 func (c *Catalog) CountThumbnailsByDrive(ctx context.Context) (map[string]DriveThumbnailCounts, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT drive_id,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') != '' THEN 1 END) AS ready_count,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') = ''
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                     AND COALESCE(thumbnail_url, '') != '' THEN 1 END) AS ready_count,
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                     AND COALESCE(thumbnail_url, '') = ''
 		                     AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped') THEN 1 END) AS pending_count,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') = ''
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                     AND COALESCE(thumbnail_url, '') = ''
 		                     AND COALESCE(thumbnail_status, 'pending') = 'failed' THEN 1 END) AS failed_count,
-		        COUNT(CASE WHEN COALESCE(thumbnail_url, '') != ''
+		        COUNT(CASE WHEN COALESCE(media_type, 'video') = 'video'
+		                     AND COALESCE(thumbnail_url, '') != ''
 		                     AND COALESCE(duration_seconds, 0) <= 0
 		                     AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped') THEN 1 END) AS duration_pending_count
 		   FROM videos
@@ -2212,10 +2352,10 @@ const allVideoCols = `
 id, drive_id, file_id, COALESCE(file_name, ''), COALESCE(content_hash, ''),
 COALESCE(sampled_sha256, ''), COALESCE(fingerprint_status, 'pending'), COALESCE(fingerprint_error, ''),
 COALESCE(parent_id, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
-duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(quality, ''), COALESCE(thumbnail_url, ''),
+duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(media_type, 'video'), COALESCE(quality, ''), COALESCE(thumbnail_url, ''),
 COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_status, 'pending'),
 COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
-views, COALESCE(last_viewed_at, 0), favorites, comments, likes, dislikes,
+views, COALESCE(last_viewed_at, 0), COALESCE(progress_seconds, 0), COALESCE(progress_at, 0), favorites, comments, likes, dislikes,
 COALESCE(category, ''), COALESCE(hidden, 0), COALESCE(badges, '[]'), COALESCE(description, ''),
 published_at, created_at, updated_at
 `
@@ -2278,16 +2418,16 @@ type rowScanner interface {
 func scanVideo(row rowScanner) (*Video, error) {
 	v := &Video{}
 	var tagsJSON, badgesJSON string
-	var publishedAt, createdAt, updatedAt, lastViewedAt int64
+	var publishedAt, createdAt, updatedAt, lastViewedAt, progressAt int64
 	var hidden int
 	err := row.Scan(
 		&v.ID, &v.DriveID, &v.FileID, &v.FileName, &v.ContentHash,
 		&v.SampledSHA256, &v.FingerprintStatus, &v.FingerprintError,
 		&v.ParentID, &v.Title, &v.Author, &tagsJSON,
-		&v.DurationSeconds, &v.Size, &v.Ext, &v.Quality, &v.ThumbnailURL,
+		&v.DurationSeconds, &v.Size, &v.Ext, &v.MediaType, &v.Quality, &v.ThumbnailURL,
 		&v.PreviewFileID, &v.PreviewLocal, &v.PreviewStatus,
 		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
-		&v.Views, &lastViewedAt, &v.Favorites, &v.Comments, &v.Likes, &v.Dislikes,
+		&v.Views, &lastViewedAt, &v.ProgressSeconds, &progressAt, &v.Favorites, &v.Comments, &v.Likes, &v.Dislikes,
 		&v.Category, &hidden, &badgesJSON, &v.Description,
 		&publishedAt, &createdAt, &updatedAt,
 	)
@@ -2297,11 +2437,15 @@ func scanVideo(row rowScanner) (*Video, error) {
 	_ = json.Unmarshal([]byte(tagsJSON), &v.Tags)
 	_ = json.Unmarshal([]byte(badgesJSON), &v.Badges)
 	v.Hidden = hidden == 1
+	v.MediaType = mediatype.Normalize(v.MediaType)
 	v.PublishedAt = time.UnixMilli(publishedAt)
 	v.CreatedAt = time.UnixMilli(createdAt)
 	v.UpdatedAt = time.UnixMilli(updatedAt)
 	if lastViewedAt > 0 {
 		v.LastViewedAt = time.UnixMilli(lastViewedAt)
+	}
+	if progressAt > 0 {
+		v.ProgressAt = time.UnixMilli(progressAt)
 	}
 	return v, nil
 }

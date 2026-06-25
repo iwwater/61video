@@ -1,10 +1,14 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
+  BookOpen,
   Film,
+  Images,
   Menu,
+  Music4,
   Settings,
   Sparkles,
+  Tv,
   Upload,
   X,
 } from "lucide-react";
@@ -13,6 +17,10 @@ const navItems = [
   { to: "/shorts", label: "短视频", icon: Sparkles },
   { to: "/upload", label: "上传", icon: Upload },
   { to: "/list", label: "视频", icon: Film },
+  { to: "/galleries", label: "图集", icon: Images },
+  { to: "/novels", label: "小说", icon: BookOpen },
+  { to: "/audio", label: "音频", icon: Music4 },
+  { to: "/anime", label: "动漫", icon: Tv },
   { to: "/admin", label: "后台", icon: Settings },
 ];
 

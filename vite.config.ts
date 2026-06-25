@@ -3,9 +3,9 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 const backendProxy = {
-  "/api": "http://127.0.0.1:9192",
-  "/p": "http://127.0.0.1:9192",
-  "/admin/api": "http://127.0.0.1:9192",
+  "/api": "http://127.0.0.1:6192",
+  "/p": "http://127.0.0.1:6192",
+  "/admin/api": "http://127.0.0.1:6192",
 };
 
 export default defineConfig({
@@ -17,12 +17,12 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
-    port: 9191,
+    port: 6191,
     proxy: backendProxy,
   },
   preview: {
     host: "0.0.0.0",
-    port: 9191,
+    port: 6191,
     proxy: backendProxy,
   },
 });

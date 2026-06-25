@@ -9,6 +9,10 @@ import {
   Palette,
   RefreshCw,
   MoreVertical,
+  Tv,
+  Database,
+  Images,
+  BookOpen,
 } from "lucide-react";
 import * as api from "./api";
 import { useAuth } from "./AuthContext";
@@ -129,9 +133,53 @@ export function AdminLayout() {
                 <span className="admin-nav__title">标签管理</span>
               </span>
             </NavLink>
+            <NavLink
+              to="/admin/image-sets"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon"><Images size={16} /></span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">图集管理</span>
+              </span>
+            </NavLink>
+            <NavLink
+              to="/admin/novels"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon"><BookOpen size={16} /></span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">小说管理</span>
+              </span>
+            </NavLink>
           </div>
           <div className="admin-nav__group">
             <span className="admin-nav__group-label">系统</span>
+            <NavLink
+              to="/admin/parse-sources"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon"><Tv size={16} /></span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">解析源</span>
+              </span>
+            </NavLink>
+            <NavLink
+              to="/admin/resource-sites"
+              className={({ isActive }) =>
+                `admin-nav__link ${isActive ? "is-active" : ""}`
+              }
+            >
+              <span className="admin-nav__icon"><Database size={16} /></span>
+              <span className="admin-nav__text">
+                <span className="admin-nav__title">资源站</span>
+              </span>
+            </NavLink>
             <NavLink
               to="/admin/theme"
               className={({ isActive }) =>

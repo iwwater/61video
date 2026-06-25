@@ -18,7 +18,15 @@ const (
 
 var (
 	legacyDefaultVideoExtensions = []string{".mp4", ".mkv", ".mov", ".webm", ".avi"}
-	defaultVideoExtensions       = []string{".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm"}
+	// videoAudioDefault 是上一版默认（视频+音频），用于检测是否需要自动升级到当前默认。
+	videoAudioDefault = []string{".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"}
+	// defaultScanExtensions 当前默认扫描扩展名：视频 + 音频 + 图片 + 文档。
+	defaultScanExtensions = []string{
+		".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm",
+		".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus",
+		".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp",
+		".pdf", ".epub", ".mobi", ".txt",
+	}
 )
 
 type Config struct {
@@ -191,7 +199,7 @@ type Preview struct {
 	Segments        int    `yaml:"segments"`
 }
 
-// Nightly 是凌晨流水线（扫盘 → 91 爬虫 → 迁移）的调度配置。
+// Nightly 是凌晨流水线（扫盘 → 61 爬虫 → 迁移）的调度配置。
 //
 // 一个进程只跑一条 nightly 流水线；该 cron 时间到达且当天还没跑过时触发，
 // 也可被管理后台「扫描所有网盘」按钮手动触发。MaxDuration 是软超时，超过
@@ -252,9 +260,9 @@ func (c *Config) applyDefaults() {
 		c.Scanner.MaxDepth = 5
 	}
 	if len(c.Scanner.VideoExtensions) == 0 {
-		c.Scanner.VideoExtensions = append([]string{}, defaultVideoExtensions...)
-	} else if isLegacyDefaultVideoExtensions(c.Scanner.VideoExtensions) {
-		c.Scanner.VideoExtensions = append(c.Scanner.VideoExtensions, ".strm")
+		c.Scanner.VideoExtensions = append([]string{}, defaultScanExtensions...)
+	} else if isLegacyDefaultVideoExtensions(c.Scanner.VideoExtensions) || isDefaultList(c.Scanner.VideoExtensions, videoAudioDefault) {
+		c.Scanner.VideoExtensions = append([]string{}, defaultScanExtensions...)
 	}
 	if c.Preview.FFmpegPath == "" {
 		c.Preview.FFmpegPath = "ffmpeg"
@@ -285,14 +293,18 @@ func (c *Config) applyDefaults() {
 }
 
 func isLegacyDefaultVideoExtensions(exts []string) bool {
-	if len(exts) != len(legacyDefaultVideoExtensions) {
+	return isDefaultList(exts, legacyDefaultVideoExtensions)
+}
+
+func isDefaultList(exts, defaults []string) bool {
+	if len(exts) != len(defaults) {
 		return false
 	}
 	seen := make(map[string]struct{}, len(exts))
 	for _, ext := range exts {
 		seen[strings.ToLower(strings.TrimSpace(ext))] = struct{}{}
 	}
-	for _, ext := range legacyDefaultVideoExtensions {
+	for _, ext := range defaults {
 		if _, ok := seen[ext]; !ok {
 			return false
 		}

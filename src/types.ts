@@ -1,5 +1,6 @@
 export type VideoItem = {
   id: string;
+  mediaType: "video" | "audio";
   href: string;
   title: string;
   thumbnail: string;
@@ -7,6 +8,10 @@ export type VideoItem = {
   previewDuration: number;
   previewStrategy: "teaser-file" | "sprite-frames";
   duration: string;
+  /** 原始秒数（前端用于算进度条比例） */
+  durationSeconds?: number;
+  /** 客户端最后一次上报的 currentTime。0=未看；>=duration-30 视为看完。 */
+  progressSeconds?: number;
   badges: string[];
   quality?: "SD" | "HD";
   sourceLabel?: string;
@@ -45,6 +50,7 @@ export type CommentItem = {
 };
 
 export type VideoDetail = VideoItem & {
+  mediaSrc?: string;
   videoSrc: string;
   poster: string;
   description: string;
@@ -77,4 +83,68 @@ export type PromoItem = {
   label: string;
   title: string;
   meta?: string;
+};
+
+export type GalleryImageItem = {
+  position: number;
+  url: string;
+  thumbUrl?: string;
+  width?: number;
+  height?: number;
+  headers?: Record<string, string>;
+};
+
+export type GalleryItem = {
+  id: string;
+  driveId: string;
+  sourceId: string;
+  title: string;
+  author: string;
+  coverUrl: string;
+  imageCount: number;
+  tags: string[];
+  description: string;
+  hidden: boolean;
+  sourceKind: string;
+  publishedAt: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type GalleryDetail = GalleryItem & {
+  images: GalleryImageItem[];
+};
+
+export type NovelContentType = "text" | "pdf";
+
+export type NovelChapter = {
+  id: number;
+  position: number;
+  title: string;
+  contentType: NovelContentType;
+  body?: string;
+  pdfUrl?: string;
+  headers?: Record<string, string>;
+};
+
+export type NovelItem = {
+  id: string;
+  driveId: string;
+  sourceId: string;
+  title: string;
+  author: string;
+  coverUrl: string;
+  contentType: NovelContentType;
+  chapterCount: number;
+  tags: string[];
+  description: string;
+  hidden: boolean;
+  sourceKind: string;
+  publishedAt: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type NovelDetail = NovelItem & {
+  chapters: NovelChapter[];
 };

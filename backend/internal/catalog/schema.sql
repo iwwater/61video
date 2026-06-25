@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS videos (
     duration_seconds INTEGER DEFAULT 0,
     size_bytes       INTEGER DEFAULT 0,
     ext              TEXT,
+    media_type       TEXT DEFAULT 'video',      -- video / audio
     quality          TEXT,                      -- HD / SD
     thumbnail_url    TEXT,
     thumbnail_status TEXT DEFAULT 'pending',    -- pending / ready / failed / skipped
@@ -28,6 +29,8 @@ CREATE TABLE IF NOT EXISTS videos (
     transcoded_size  INTEGER DEFAULT 0,
     views            INTEGER DEFAULT 0,
     last_viewed_at   INTEGER DEFAULT 0,
+    progress_seconds REAL DEFAULT 0,             -- 观看进度（秒）。0=未看；>=duration-30 视为看完
+    progress_at      INTEGER DEFAULT 0,          -- 上次更新进度的时间（unix ms）
     favorites        INTEGER DEFAULT 0,
     comments         INTEGER DEFAULT 0,
     likes            INTEGER DEFAULT 0,
@@ -164,3 +167,163 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- 图集主表（独立于 videos，承载一组图片）
+CREATE TABLE IF NOT EXISTS image_sets (
+    id            TEXT PRIMARY KEY,          -- 站点侧 source_id，作为稳定 ID
+    drive_id      TEXT DEFAULT '',
+    source_id     TEXT NOT NULL DEFAULT '',  -- 站点侧唯一 ID（与 id 同源，但便于 join）
+    title         TEXT NOT NULL,
+    author        TEXT DEFAULT '',
+    cover_url     TEXT DEFAULT '',           -- 首页缩略图
+    image_count   INTEGER NOT NULL DEFAULT 0,
+    tags          TEXT DEFAULT '[]',         -- JSON array
+    description   TEXT DEFAULT '',
+    hidden        INTEGER NOT NULL DEFAULT 0,
+    source_kind   TEXT DEFAULT 'crawler',    -- crawler | manual | local
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    published_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_sets_pub ON image_sets(published_at DESC);
+
+CREATE TABLE IF NOT EXISTS image_set_images (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    set_id      TEXT NOT NULL,
+    position    INTEGER NOT NULL,            -- 0-based 翻页顺序
+    url         TEXT NOT NULL,
+    thumb_url   TEXT DEFAULT '',
+    width       INTEGER DEFAULT 0,
+    height      INTEGER DEFAULT 0,
+    headers     TEXT DEFAULT '{}',           -- JSON object (Referer 等)
+    FOREIGN KEY (set_id) REFERENCES image_sets(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_set_images_set ON image_set_images(set_id, position);
+
+-- 图集黑名单墓碑（前台拉黑 / 后台删除后不再入库）
+CREATE TABLE IF NOT EXISTS image_set_tombstones (
+    set_id      TEXT PRIMARY KEY,
+    created_at  INTEGER NOT NULL
+);
+
+-- 爬虫已处理的图集 source_id 记录（去重 + 状态追踪）
+CREATE TABLE IF NOT EXISTS image_set_crawler_sources (
+    source_kind TEXT NOT NULL,
+    drive_id    TEXT NOT NULL,
+    source_id   TEXT NOT NULL,
+    status      TEXT DEFAULT '',   -- imported | duplicate | failed
+    set_id      TEXT DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (source_kind, drive_id, source_id)
+);
+
+-- 小说主表（独立于 videos，承载文本或 PDF 章节）
+CREATE TABLE IF NOT EXISTS novel_sets (
+    id            TEXT PRIMARY KEY,          -- 站点侧 source_id，作为稳定 ID
+    drive_id      TEXT DEFAULT '',
+    source_id     TEXT NOT NULL DEFAULT '',  -- 站点侧唯一 ID
+    title         TEXT NOT NULL,
+    author        TEXT DEFAULT '',
+    cover_url     TEXT DEFAULT '',
+    content_type  TEXT NOT NULL DEFAULT 'text',  -- text | pdf
+    chapter_count INTEGER NOT NULL DEFAULT 0,
+    tags          TEXT DEFAULT '[]',         -- JSON array
+    description   TEXT DEFAULT '',
+    hidden        INTEGER NOT NULL DEFAULT 0,
+    source_kind   TEXT DEFAULT 'crawler',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    published_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_novel_sets_pub ON novel_sets(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_novel_sets_ctype ON novel_sets(content_type);
+
+CREATE TABLE IF NOT EXISTS novel_chapters (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    novel_id    TEXT NOT NULL,
+    position    INTEGER NOT NULL,            -- 0-based 阅读顺序
+    title       TEXT NOT NULL DEFAULT '',
+    content_type TEXT NOT NULL DEFAULT 'text', -- text | pdf（默认继承 novel_sets.content_type）
+    body        TEXT DEFAULT '',             -- 文本章节正文
+    pdf_url     TEXT DEFAULT '',             -- PDF 章节 URL
+    headers     TEXT DEFAULT '{}',           -- JSON object
+    FOREIGN KEY (novel_id) REFERENCES novel_sets(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_novel_chapters_novel ON novel_chapters(novel_id, position);
+
+-- 小说黑名单墓碑
+CREATE TABLE IF NOT EXISTS novel_tombstones (
+    novel_id    TEXT PRIMARY KEY,
+    created_at  INTEGER NOT NULL
+);
+
+-- 爬虫已处理的小说 source_id 记录
+CREATE TABLE IF NOT EXISTS novel_crawler_sources (
+    source_kind TEXT NOT NULL,
+    drive_id    TEXT NOT NULL,
+    source_id   TEXT NOT NULL,
+    status      TEXT DEFAULT '',   -- imported | duplicate | failed
+    novel_id    TEXT DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (source_kind, drive_id, source_id)
+);
+
+-- 影视解析/搜索源（后台可配置）
+-- kind: 'search' 支持按关键词搜索 | 'parse' 支持解析 URL | 'both' 两者都支持
+-- 'iframe' / 'iframe-search' 前端用 <iframe> 嵌入，不做服务端解析
+-- search_url / parse_url 是 URL 模板，{kw} / {url} 会被替换为 URL 编码后的值
+CREATE TABLE IF NOT EXISTS parse_sources (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    kind         TEXT NOT NULL DEFAULT 'parse',  -- search | parse | both | iframe | iframe-search
+    search_url   TEXT DEFAULT '',                  -- 含 {kw} 占位符
+    parse_url    TEXT DEFAULT '',                  -- 含 {url} 占位符
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    sort         INTEGER NOT NULL DEFAULT 0,
+    note         TEXT DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    -- 健康检查：最近一次后台自动 ping 的结果
+    last_health_status     TEXT DEFAULT '',        -- ok | fail | ''
+    last_health_at         INTEGER NOT NULL DEFAULT 0,
+    last_health_error      TEXT DEFAULT '',
+    last_health_response_ms INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_parse_sources_sort ON parse_sources(sort, name);
+-- health 列直接在 CREATE TABLE 里定义（见上方），新表自动包含。
+-- 老库需要手动 ALTER 加列（SQLite 没 IF NOT EXISTS）：
+--   ALTER TABLE parse_sources ADD COLUMN last_health_status TEXT DEFAULT '';
+--   ALTER TABLE parse_sources ADD COLUMN last_health_at INTEGER NOT NULL DEFAULT 0;
+--   ALTER TABLE parse_sources ADD COLUMN last_health_error TEXT DEFAULT '';
+--   ALTER TABLE parse_sources ADD COLUMN last_health_response_ms INTEGER NOT NULL DEFAULT 0;
+
+-- resource_sites：影视资源站（行业标准 JSON API）。
+-- 标准协议：GET {api_url} 替换 {kw} 为 URL 编码后的关键词，期望返回形如
+--   { "code": 1, "list": [ { "vod_id": ..., "vod_name": ..., "vod_pic": ...,
+--                            "vod_remarks": ..., "vod_year": ..., "vod_play_url": ... }, ... ] }
+-- 的 JSON。vod_play_url 形如 "第1集$https://xxx.m3u8#第2集$https://yyy.m3u8"。
+-- play_url_mode:
+--   "first"   取 vod_play_url 第一段（默认），自动识别 m3u8/mp4 直链 vs 详情页
+--   "direct"  始终当作直链（m3u8/mp4）播放
+--   "detail"  始终当作详情页 URL，走已有 parse 流程
+CREATE TABLE IF NOT EXISTS resource_sites (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    api_url        TEXT NOT NULL,                  -- 含 {kw} 占位符
+    play_url_mode  TEXT NOT NULL DEFAULT 'first',  -- first | direct | detail
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    sort           INTEGER NOT NULL DEFAULT 0,
+    note           TEXT DEFAULT '',
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_sites_sort ON resource_sites(sort, name);
+CREATE INDEX IF NOT EXISTS idx_resource_sites_enabled ON resource_sites(enabled);

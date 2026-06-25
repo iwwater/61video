@@ -10,7 +10,7 @@ export const kindAbbr: Record<string, string> = {
   onedrive: "OD",
   googledrive: "GD",
   localstorage: "Lo",
-  spider91: "91",
+  spider91: "61",
 };
 
 export function driveKindAbbr(kind: string): string {
@@ -33,7 +33,7 @@ export const kindLabel: Record<string, string> = {
   onedrive: "OneDrive",
   googledrive: "Google Drive",
   localstorage: "本地存储",
-  spider91: "91 爬虫",
+  spider91: "61 爬虫",
 };
 
 export type FormState = {

@@ -598,6 +598,65 @@ func TestHandleUploadVideoDefaultsBlankTitleToOriginalFileName(t *testing.T) {
 	}
 }
 
+func TestHandleUploadAudioDisablesPreviewAndMarksMediaType(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	var queued *catalog.Video
+	server := &Server{
+		Catalog:  cat,
+		LocalDir: t.TempDir(),
+		OnVideoUploaded: func(v *catalog.Video) {
+			queued = v
+		},
+	}
+	req := multipartUploadRequest(t, map[string]string{
+		"title": "audio upload",
+	}, "track.mp3", "audio-bytes")
+	rr := httptest.NewRecorder()
+
+	server.handleUploadVideo(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var dto VideoDTO
+	if err := json.NewDecoder(rr.Body).Decode(&dto); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if dto.MediaType != "audio" {
+		t.Fatalf("dto media type = %q, want audio", dto.MediaType)
+	}
+	if dto.PreviewSrc != "" {
+		t.Fatalf("audio preview src = %q, want empty", dto.PreviewSrc)
+	}
+
+	got, err := cat.GetVideo(ctx, dto.ID)
+	if err != nil {
+		t.Fatalf("get uploaded audio: %v", err)
+	}
+	if got.MediaType != "audio" {
+		t.Fatalf("stored media type = %q, want audio", got.MediaType)
+	}
+	if got.PreviewStatus != "disabled" {
+		t.Fatalf("preview status = %q, want disabled", got.PreviewStatus)
+	}
+	if queued == nil || queued.ID != got.ID {
+		t.Fatalf("queued video = %#v, want uploaded audio item", queued)
+	}
+	if queued.PreviewStatus != "disabled" {
+		t.Fatalf("queued preview status = %q, want disabled", queued.PreviewStatus)
+	}
+}
+
 func TestHandleUploadVideoRejectsUnsupportedTag(t *testing.T) {
 	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
 	if err != nil {

@@ -192,7 +192,7 @@ func TestHandleCheckUpdateReportsNewRelease(t *testing.T) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tag_name": "v0.2.0",
-			"html_url": "https://github.com/nianzhibai/91/releases/tag/v0.2.0",
+			"html_url": "https://github.com/iwwater/61video/releases/tag/v0.2.0",
 		})
 	}))
 	t.Cleanup(releaseServer.Close)
@@ -234,7 +234,7 @@ func TestHandleCheckUpdateReportsUpToDate(t *testing.T) {
 	releaseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tag_name": "v0.2.0",
-			"html_url": "https://github.com/nianzhibai/91/releases/tag/v0.2.0",
+			"html_url": "https://github.com/iwwater/61video/releases/tag/v0.2.0",
 		})
 	}))
 	t.Cleanup(releaseServer.Close)
@@ -262,7 +262,7 @@ func TestHandleCheckUpdateUsesDockerImageVersion(t *testing.T) {
 	releaseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tag_name": "v0.2.0",
-			"html_url": "https://github.com/nianzhibai/91/releases/tag/v0.2.0",
+			"html_url": "https://github.com/iwwater/61video/releases/tag/v0.2.0",
 		})
 	}))
 	t.Cleanup(releaseServer.Close)
@@ -779,7 +779,7 @@ func TestHandleUpsertSpider91DriveIsRejected(t *testing.T) {
 		Credentials: map[string]string{
 			"last_crawl_at": "1800000000",
 			"proxy":         "http://old-proxy.local:7890",
-			"script_path":   "/opt/video-site-91/data/crawler-scripts/legacy-spider.py",
+			"script_path":   "/opt/video-site-61/data/crawler-scripts/legacy-spider.py",
 		},
 		Status: "ok",
 	}); err != nil {
@@ -1188,13 +1188,13 @@ func TestHandleUpsertCrawlerRequiresScriptPath(t *testing.T) {
 	}
 
 	// 带脚本路径时正常保存，且请求中的 builtin 字段被忽略，不会写入凭证。
-	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
-		"id": "spider91-main",
-		"builtin": "spider91",
-		"scriptPath": "`+scriptPath+`",
-		"targetNew": "15",
-		"teaserEnabled": false
-	}`))
+	req = asJSONRequest("/admin/api/crawlers", jsonBody(map[string]any{
+		"id":           "spider91-main",
+		"builtin":      "spider91",
+		"scriptPath":   scriptPath,
+		"targetNew":    "15",
+		"teaserEnabled": false,
+	}))
 	rr = httptest.NewRecorder()
 	srv.handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusOK {
@@ -1248,10 +1248,10 @@ func TestHandleUpsertCrawlerGeneratesIDFromScriptName(t *testing.T) {
 		t.Fatalf("write crawler script: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
-		"scriptPath": "`+scriptPath+`",
-		"targetNew": "15"
-	}`))
+	req := asJSONRequest("/admin/api/crawlers", jsonBody(map[string]any{
+		"scriptPath": scriptPath,
+		"targetNew":  "15",
+	}))
 	rr := httptest.NewRecorder()
 	(&AdminServer{Catalog: cat}).handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusOK {
@@ -1313,12 +1313,12 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
-		"id": "crawler-upload",
-		"scriptPath": "`+scriptPath+`",
+	req := asJSONRequest("/admin/api/crawlers", jsonBody(map[string]any{
+		"id":            "crawler-upload",
+		"scriptPath":    scriptPath,
 		"uploadDriveId": "p115-target",
-		"teaserEnabled": false
-	}`))
+		"teaserEnabled": false,
+	}))
 	rr := httptest.NewRecorder()
 	srv.handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusOK {
@@ -1338,11 +1338,11 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 		t.Fatalf("teaser callback on create = %q, want none", teaserCallbackID)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
-		"id": "crawler-upload",
-		"scriptPath": "`+scriptPath+`",
-		"uploadDriveId": "wopan-target"
-	}`))
+	req = asJSONRequest("/admin/api/crawlers", jsonBody(map[string]any{
+		"id":            "crawler-upload",
+		"scriptPath":    scriptPath,
+		"uploadDriveId": "wopan-target",
+	}))
 	rr = httptest.NewRecorder()
 	srv.handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusOK {
@@ -1362,11 +1362,11 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 		t.Fatalf("teaser callback after preserved edit = %q, want none", teaserCallbackID)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
-		"id": "crawler-upload",
-		"scriptPath": "`+scriptPath+`",
-		"uploadDriveId": "guangyapan-target"
-	}`))
+	req = asJSONRequest("/admin/api/crawlers", jsonBody(map[string]any{
+		"id":            "crawler-upload",
+		"scriptPath":    scriptPath,
+		"uploadDriveId": "guangyapan-target",
+	}))
 	rr = httptest.NewRecorder()
 	srv.handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusOK {
@@ -1380,12 +1380,12 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 		t.Fatalf("upload_drive_id = %q, want guangyapan-target", got.Credentials["upload_drive_id"])
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
-		"id": "crawler-upload",
-		"scriptPath": "`+scriptPath+`",
+	req = asJSONRequest("/admin/api/crawlers", jsonBody(map[string]any{
+		"id":            "crawler-upload",
+		"scriptPath":    scriptPath,
 		"uploadDriveId": "wopan-target",
-		"teaserEnabled": true
-	}`))
+		"teaserEnabled": true,
+	}))
 	rr = httptest.NewRecorder()
 	srv.handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusOK {
@@ -1402,11 +1402,11 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 		t.Fatalf("teaser callback = %q/%v, want crawler-upload/true", teaserCallbackID, teaserCallbackEnabled)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
-		"id": "crawler-upload",
-		"scriptPath": "`+scriptPath+`",
-		"uploadDriveId": "local-target"
-	}`))
+	req = asJSONRequest("/admin/api/crawlers", jsonBody(map[string]any{
+		"id":            "crawler-upload",
+		"scriptPath":    scriptPath,
+		"uploadDriveId": "local-target",
+	}))
 	rr = httptest.NewRecorder()
 	srv.handleUpsertCrawler(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -2670,4 +2670,17 @@ func TestHandleRegenFailedPreviewsInvokesHookWithDriveID(t *testing.T) {
 	if calledWith != "PikPak" {
 		t.Fatalf("hook called with %q, want PikPak", calledWith)
 	}
+}
+
+// jsonCrawlerBody 把 crawler upsert 请求体编码成 JSON 字符串，避免在 Windows
+// 路径里直接拼接反斜杠到 JSON 字符串字面量（`\U` 是非法 JSON 转义）。
+// 仅在测试中用。
+func jsonBody(payload map[string]any) string {
+	b, _ := json.Marshal(payload)
+	return string(b)
+}
+
+// asJSONRequest 把 body 字符串包成 POST 请求，bytes.NewReader 满足 io.Reader。
+func asJSONRequest(path, body string) *http.Request {
+	return httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(body)))
 }

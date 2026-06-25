@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
+import { Music4 } from "lucide-react";
 import type { PreviewState, VideoItem } from "@/types";
 import { previewController } from "@/lib/previewController";
 import {
@@ -40,6 +41,7 @@ export function VideoCard({ video, priority = false }: Props) {
 
   const activeId = useActivePreviewId();
   const inView = useInViewport(rootRef);
+  const isAudio = video.mediaType === "audio";
 
   // 当全局活跃卡片不是自己时，立刻停止预览
   useEffect(() => {
@@ -128,6 +130,7 @@ export function VideoCard({ video, priority = false }: Props) {
       : withRetryParam(video.thumbnail, thumbnailRetry);
 
   function startPreviewIntent() {
+    if (isAudio) return;
     if (!inView) return;
     if (hoverTimerRef.current) return;
     setPreviewState("intent");
@@ -139,6 +142,7 @@ export function VideoCard({ video, priority = false }: Props) {
   }
 
   function startPreviewNow(options: { requireInView: boolean }) {
+    if (isAudio) return;
     if (options.requireInView && !inView) return;
     if (hoverTimerRef.current) {
       window.clearTimeout(hoverTimerRef.current);
@@ -201,15 +205,21 @@ export function VideoCard({ video, priority = false }: Props) {
         onClickCapture={handleClickCapture}
       >
         <div className="thumb-frame">
-          <img
-            className="thumb-image"
-            src={thumbnailSrc}
-            alt={video.title}
-            loading={priority ? "eager" : "lazy"}
-            onError={handleThumbnailError}
-          />
+          {video.thumbnail ? (
+            <img
+              className="thumb-image"
+              src={thumbnailSrc}
+              alt={video.title}
+              loading={priority ? "eager" : "lazy"}
+              onError={handleThumbnailError}
+            />
+          ) : (
+            <div className="thumb-placeholder thumb-placeholder--audio" aria-hidden="true">
+              <Music4 size={42} />
+            </div>
+          )}
 
-          {shouldRenderPreview && (
+          {shouldRenderPreview && !isAudio && (
             <PreviewVideo
               ref={videoRef}
               src={video.previewSrc}
@@ -220,13 +230,13 @@ export function VideoCard({ video, priority = false }: Props) {
             />
           )}
 
-          {previewState === "loading" && <span className="preview-loader" />}
-          {previewState === "error" && (
+          {previewState === "loading" && !isAudio && <span className="preview-loader" />}
+          {previewState === "error" && !isAudio && (
             <span className="preview-error">预览加载失败</span>
           )}
 
           {/* 预览进度条（播放时显示在底部） */}
-          {previewState === "playing" && (
+          {previewState === "playing" && !isAudio && (
             <div className="preview-progress" aria-hidden="true">
               <div
                 className="preview-progress__bar"
@@ -236,7 +246,7 @@ export function VideoCard({ video, priority = false }: Props) {
           )}
 
           {/* hover 时右上角 "预览" 角标 */}
-          {previewState === "playing" && (
+          {previewState === "playing" && !isAudio && (
             <span className="preview-tag" aria-hidden="true">
               预览
             </span>

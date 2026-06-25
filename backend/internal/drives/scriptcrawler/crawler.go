@@ -26,12 +26,13 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/mediaasset"
+	"github.com/video-site/backend/internal/mediatype"
 	"golang.org/x/net/proxy"
 )
 
 const (
 	DefaultTargetNew           = 10
-	defaultUserAgent           = "Mozilla/5.0 (compatible; video-site-91-scriptcrawler/1.0)"
+	defaultUserAgent           = "Mozilla/5.0 (compatible; video-site-61-scriptcrawler/1.0)"
 	defaultCandidateMultiplier = 10
 	defaultCandidateFloorExtra = 50
 	defaultCandidateBudgetMax  = 500
@@ -136,6 +137,7 @@ type JobNetwork struct {
 type Event struct {
 	Type               string            `json:"type"`
 	Item               Item              `json:"item"`
+	MediaKind          string            `json:"media_kind,omitempty"`
 	SourceID           string            `json:"source_id,omitempty"`
 	Title              string            `json:"title,omitempty"`
 	MediaURL           string            `json:"media_url,omitempty"`
@@ -157,9 +159,19 @@ type Event struct {
 	Emitted            int               `json:"emitted,omitempty"`
 	Message            string            `json:"message,omitempty"`
 	Stats              json.RawMessage   `json:"stats,omitempty"`
+	Images             []CrawlerImage    `json:"images,omitempty"`
+}
+
+type CrawlerImage struct {
+	URL      string `json:"url"`
+	Alt      string `json:"alt,omitempty"`
+	ThumbURL string `json:"thumb_url,omitempty"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
 }
 
 type Item struct {
+	MediaKind          string            `json:"media_kind,omitempty"`
 	SourceID           string            `json:"source_id,omitempty"`
 	Title              string            `json:"title"`
 	MediaURL           string            `json:"media_url,omitempty"`
@@ -179,6 +191,7 @@ type Item struct {
 	ThumbnailHeaders   map[string]string `json:"thumbnail_headers,omitempty"`
 	Media              MediaRef          `json:"media,omitempty"`
 	Thumbnail          MediaRef          `json:"thumbnail,omitempty"`
+	Images             []CrawlerImage    `json:"images,omitempty"`
 }
 
 type MediaRef struct {
@@ -189,11 +202,20 @@ type MediaRef struct {
 
 func (e Event) normalizedItem() Item {
 	item := e.Item
+	if strings.TrimSpace(item.MediaKind) == "" {
+		item.MediaKind = e.MediaKind
+	}
+	if item.MediaKind == "" {
+		item.MediaKind = "video"
+	}
 	if strings.TrimSpace(item.SourceID) == "" {
 		item.SourceID = e.SourceID
 	}
 	if strings.TrimSpace(item.Title) == "" {
 		item.Title = e.Title
+	}
+	if len(item.Images) == 0 && len(e.Images) > 0 {
+		item.Images = e.Images
 	}
 	if strings.TrimSpace(item.MediaURL) == "" {
 		item.MediaURL = e.MediaURL
@@ -351,9 +373,15 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 				_ = cmd.Process.Kill()
 				break
 			}
-			added, err := c.processItem(ctx, item)
-			if err != nil {
-				log.Printf("[scriptcrawler] drive=%s item failed source_id=%q title=%q: %v", c.cfg.Driver.ID(), item.SourceID, item.Title, err)
+			var added bool
+			var procErr error
+			if strings.EqualFold(item.MediaKind, "image_set") {
+				added, procErr = c.processImageSetItem(ctx, item)
+			} else {
+				added, procErr = c.processItem(ctx, item)
+			}
+			if procErr != nil {
+				log.Printf("[scriptcrawler] drive=%s item failed source_id=%q title=%q media_kind=%s: %v", c.cfg.Driver.ID(), item.SourceID, item.Title, item.MediaKind, procErr)
 				result.Failed++
 			} else if added {
 				result.NewVideos++
@@ -393,15 +421,28 @@ func (c *Crawler) RunOnce(ctx context.Context, targetNew int) (*CrawlResult, err
 }
 
 func (c *Crawler) writeSeenSourceIDs(ctx context.Context, path string) (int, error) {
+	seen := make(map[string]struct{})
+	// 视频 source_id
 	seenIDs, err := c.cfg.Catalog.ListCrawlerSourceIDs(ctx, c.sourceKind(), c.cfg.Driver.ID())
 	if err != nil {
 		return 0, err
 	}
-	seen := make(map[string]struct{}, len(seenIDs))
 	for _, id := range seenIDs {
 		id = strings.TrimSpace(id)
 		if id != "" {
 			seen[id] = struct{}{}
+		}
+	}
+	// 图集 source_id
+	imgSeenIDs, err := c.cfg.Catalog.ListCrawlerImageSetSourceIDs(ctx, c.sourceKind(), c.cfg.Driver.ID())
+	if err != nil {
+		log.Printf("[scriptcrawler] drive=%s list image_set seen source IDs: %v", c.cfg.Driver.ID(), err)
+	} else {
+		for _, id := range imgSeenIDs {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				seen[id] = struct{}{}
+			}
 		}
 	}
 	tmp := path + ".part"
@@ -563,8 +604,9 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 	if quality == "" {
 		quality = "HD"
 	}
+	mediaType := mediatype.FromExtension(videoExt)
 	previewStatus := "pending"
-	if c.previewDisabled(ctx) {
+	if mediaType == mediatype.Audio || c.previewDisabled(ctx) {
 		previewStatus = "disabled"
 	}
 	v := &catalog.Video{
@@ -578,6 +620,7 @@ func (c *Crawler) processItem(ctx context.Context, item Item) (bool, error) {
 		DurationSeconds: item.DurationSeconds,
 		Size:            size,
 		Ext:             strings.TrimPrefix(videoExt, "."),
+		MediaType:       mediaType,
 		Quality:         quality,
 		Category:        strings.TrimSpace(item.Category),
 		Description:     strings.TrimSpace(item.Description),
@@ -1254,6 +1297,109 @@ func mergeStringLists(lists ...[]string) []string {
 		}
 	}
 	return out
+}
+
+// processImageSetItem 处理 media_kind="image_set" 类型的 item。
+// 校验并入库到 image_sets 表，不涉及文件下载（图片 URL 保持原始直链）。
+func (c *Crawler) processImageSetItem(ctx context.Context, item Item) (bool, error) {
+	item, sourceID, err := normalizeImageSetItem(item)
+	if err != nil {
+		return false, err
+	}
+	sourceKind := c.sourceKind()
+	setID := BuildVideoIDForKind(sourceKind, c.cfg.Driver.ID(), sourceID)
+	if deleted, err := c.cfg.Catalog.IsImageSetDeleted(ctx, setID); err != nil {
+		return false, err
+	} else if deleted {
+		return false, nil
+	}
+	if existing, _ := c.cfg.Catalog.GetImageSet(ctx, setID); existing != nil {
+		return false, nil
+	}
+
+	now := time.Now()
+	title := strings.TrimSpace(item.Title)
+	if title == "" {
+		title = sourceID
+	}
+	author := strings.TrimSpace(item.Author)
+	if author == "" {
+		author = c.cfg.Driver.ID()
+	}
+	tags := cleanStringList(item.Tags)
+	if crawlerTag := c.crawlerTagName(); crawlerTag != "" {
+		tags = mergeStringLists(tags, []string{crawlerTag})
+	}
+	publishedAt := now
+	if parsed := parsePublishedAt(item.PublishedAt); !parsed.IsZero() {
+		publishedAt = parsed
+	}
+	coverURL := strings.TrimSpace(item.ThumbnailURL)
+	if coverURL == "" {
+		coverURL = strings.TrimSpace(item.Thumbnail.URL)
+	}
+	if coverURL == "" && len(item.Images) > 0 {
+		coverURL = strings.TrimSpace(item.Images[0].URL)
+	}
+
+	images := make([]catalog.ImageSetItem, 0, len(item.Images))
+	for i, img := range item.Images {
+		images = append(images, catalog.ImageSetItem{
+			Position: i,
+			URL:      strings.TrimSpace(img.URL),
+			ThumbURL: strings.TrimSpace(img.ThumbURL),
+			Width:    img.Width,
+			Height:   img.Height,
+		})
+	}
+
+	gs := &catalog.ImageSet{
+		ID:          setID,
+		DriveID:     c.cfg.Driver.ID(),
+		SourceID:    sourceID,
+		Title:       title,
+		Author:      author,
+		CoverURL:    coverURL,
+		ImageCount:  len(images),
+		Tags:        tags,
+		Description: strings.TrimSpace(item.Description),
+		SourceKind:  sourceKind,
+		PublishedAt: publishedAt.UnixMilli(),
+		CreatedAt:   now.UnixMilli(),
+		UpdatedAt:   now.UnixMilli(),
+		Images:      images,
+	}
+	if err := catalog.ValidateImageSet(gs); err != nil {
+		return false, err
+	}
+	if err := c.cfg.Catalog.UpsertImageSet(ctx, gs); err != nil {
+		return false, err
+	}
+	if err := c.cfg.Catalog.MarkCrawlerImageSetSourceSeen(ctx, sourceKind, c.cfg.Driver.ID(), sourceID, "imported", setID); err != nil {
+		log.Printf("[scriptcrawler] drive=%s source_id=%s mark image_set imported seen: %v", c.cfg.Driver.ID(), sourceID, err)
+	}
+	log.Printf("[scriptcrawler] drive=%s source_id=%s image_set ok title=%q images=%d", c.cfg.Driver.ID(), sourceID, title, len(images))
+	return true, nil
+}
+
+func normalizeImageSetItem(item Item) (Item, string, error) {
+	item.Title = strings.TrimSpace(item.Title)
+	if item.Title == "" {
+		return item, "", errors.New("title is required")
+	}
+	if len(item.Images) == 0 {
+		return item, "", errors.New("images are required for image_set")
+	}
+	item.DetailURL = strings.TrimSpace(item.DetailURL)
+	item.Author = strings.TrimSpace(item.Author)
+	item.Description = strings.TrimSpace(item.Description)
+	item.PublishedAt = strings.TrimSpace(item.PublishedAt)
+
+	sourceID := normalizeSourceID(item.SourceID)
+	if sourceID == "" {
+		sourceID = generatedSourceID(item)
+	}
+	return item, sourceID, nil
 }
 
 func copyFileAtomic(src, dst string) error {

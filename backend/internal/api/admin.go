@@ -23,6 +23,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/guangyapan"
 	"github.com/video-site/backend/internal/drives/p123"
+	"github.com/video-site/backend/internal/systemtags"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/spider91"
 	"github.com/video-site/backend/internal/drives/wopan"
@@ -68,6 +69,8 @@ type AdminServer struct {
 	// OnStopDriveTranscode 手动停止某盘正在进行的转码任务。返回是否有任务被停。
 	OnStopDriveTranscode         func(driveID string) bool
 	OnDeleteVideo                func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
+	OnDeleteImageSet             func(ctx context.Context, imageSetID string, deleteSource bool) (DeleteImageSetResult, error)
+	OnDeleteNovelSet             func(ctx context.Context, novelID string, deleteSource bool) (DeleteNovelSetResult, error)
 	GetDriveGenerationStatuses   func() map[string]DriveGenerationStatuses
 	GetPreviewGenerationVideoIDs func() map[string]bool
 	// OnTeaserEnabledChanged 在 per-drive 预览视频开关被切换后调用。
@@ -80,12 +83,15 @@ type AdminServer struct {
 	// Spider91 → 115/123/PikPak/OneDrive/Google Drive/联通网盘/光鸭网盘 上传目标 drive ID 读写
 	GetSpider91UploadDriveID func() string
 	SetSpider91UploadDriveID func(driveID string) error
-	// OnRunNightlyJob 触发一次完整的凌晨流水线（Phase1 扫盘 + Phase2 91 爬虫 +
+	// OnRunNightlyJob 触发一次完整的凌晨流水线（Phase1 扫盘 + Phase2 61 爬虫 +
 	// Phase3 迁移）。立即返回 —— 实际任务在后台跑，admin 在日志或下次状态查询里
 	// 看进度。若流水线正在跑或已排队，Runner 会拒绝重复触发。
 	OnRunNightlyJob func() bool
 	// GetNightlyJobStatus 返回凌晨流水线当前状态，用于前端禁用重复触发按钮。
 	GetNightlyJobStatus func() NightlyJobStatus
+	// HealthChecker 健康检查器（parse_sources 定期 ping）。注入 interface
+	// 是为了避免 admin 包反向依赖 parsehealth 包。
+	HealthChecker interface{}
 	// ListDriveDirChildren 列出某个 drive 在 parentID 目录下的直接子目录。
 	// parentID 为空时使用 drive 的 RootID。返回 (子目录列表, error)。
 	// 用于"设置跳过目录"弹窗按需展开浏览网盘目录树；只返回目录条目，文件忽略。
@@ -148,6 +154,16 @@ type DeleteVideoResult struct {
 	DeletedSource bool `json:"deletedSource"`
 }
 
+type DeleteImageSetResult struct {
+	OK            bool `json:"ok"`
+	DeletedSource bool `json:"deletedSource"`
+}
+
+type DeleteNovelSetResult struct {
+	OK            bool `json:"ok"`
+	DeletedSource bool `json:"deletedSource"`
+}
+
 type deleteVideoReq struct {
 	DeleteSource bool `json:"deleteSource"`
 }
@@ -205,6 +221,12 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Delete("/videos/{id}", a.handleDeleteVideo)
 			r.Post("/videos/regen-preview", a.handleRegenAllPreviews)
 			r.Post("/videos/{id}/regen-preview", a.handleRegenPreview)
+			// 图集
+			r.Get("/image-sets", a.handleAdminListImageSets)
+			r.Delete("/image-sets/{id}", a.handleDeleteImageSet)
+			// 小说
+			r.Get("/novels", a.handleAdminListNovels)
+			r.Delete("/novels/{id}", a.handleDeleteNovel)
 			// 黑名单（被拉黑/手动删除、扫盘不再入库的视频）
 			r.Get("/blacklist", a.handleListBlacklist)
 			r.Delete("/blacklist/{id}", a.handleRemoveBlacklist)
@@ -213,10 +235,23 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Get("/tags", a.handleListTags)
 			r.Post("/tags", a.handleCreateTag)
 			r.Delete("/tags/{id}", a.handleDeleteTag)
+			r.Get("/tags/system", a.handleGetSystemTags)
+			r.Put("/tags/system", a.handlePutSystemTags)
 
 			// 运行时设置
 			r.Get("/settings", a.handleGetSettings)
 			r.Put("/settings", a.handlePutSettings)
+
+			// 影视解析/搜索源（后台可配置）
+			r.Get("/parse-sources", a.handleListParseSources)
+			r.Post("/parse-sources", a.handleUpsertParseSource)
+			r.Delete("/parse-sources/{id}", a.handleDeleteParseSource)
+			r.Post("/parse-sources/health/check", a.handleRunHealthCheck)
+
+			// 影视资源站（行业标准 JSON API）
+			r.Get("/resource-sites", a.handleListResourceSites)
+			r.Post("/resource-sites", a.handleUpsertResourceSite)
+			r.Delete("/resource-sites/{id}", a.handleDeleteResourceSite)
 
 			// 运维任务
 			r.Get("/update/check", a.handleCheckUpdate)
@@ -400,7 +435,7 @@ func (a *AdminServer) latestRelease(ctx context.Context) (githubReleaseDTO, erro
 	if url == "" {
 		repo := strings.TrimSpace(a.GitHubRepo)
 		if repo == "" {
-			repo = "nianzhibai/91"
+			repo = "iwwater/61video"
 		}
 		url = "https://api.github.com/repos/" + repo + "/releases/latest"
 	}
@@ -413,7 +448,7 @@ func (a *AdminServer) latestRelease(ctx context.Context) (githubReleaseDTO, erro
 		return githubReleaseDTO{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "video-site-91")
+	req.Header.Set("User-Agent", "video-site-61")
 	res, err := client.Do(req)
 	if err != nil {
 		return githubReleaseDTO{}, err
@@ -2127,6 +2162,46 @@ func (a *AdminServer) handleListTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tags)
 }
 
+// systemTagDTO 是 GET/PUT /admin/api/tags/system 的入参/出参。
+type systemTagDTO struct {
+	Label   string   `json:"label"`
+	Aliases []string `json:"aliases"`
+}
+
+// handleGetSystemTags 返回当前生效的 system 标签集合（来自 settings 表，首次启动会用 fixedtags 种子）。
+func (a *AdminServer) handleGetSystemTags(w http.ResponseWriter, r *http.Request) {
+	tags := a.Catalog.SystemTags()
+	out := make([]systemTagDTO, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, systemTagDTO{Label: t.Label, Aliases: append([]string(nil), t.Aliases...)})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handlePutSystemTags 整体替换 system 标签集合，写库并刷新内存。
+// label 必须非空且唯一；aliases 中空字符串会被忽略。
+func (a *AdminServer) handlePutSystemTags(w http.ResponseWriter, r *http.Request) {
+	var in []systemTagDTO
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	tags := make([]systemtags.Tag, 0, len(in))
+	for _, t := range in {
+		label := strings.TrimSpace(t.Label)
+		if label == "" {
+			writeErr(w, http.StatusBadRequest, errors.New("label is required"))
+			return
+		}
+		tags = append(tags, systemtags.Tag{Label: label, Aliases: t.Aliases})
+	}
+	if err := a.Catalog.ReplaceSystemTags(r.Context(), tags); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(tags)})
+}
+
 type createTagReq struct {
 	Label   string   `json:"label"`
 	Aliases []string `json:"aliases"`
@@ -2398,4 +2473,352 @@ func (a *AdminServer) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 		resp.Spider91UploadDriveID = a.GetSpider91UploadDriveID()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// ---------- 影视解析/搜索源管理 ----------
+
+type parseSourceDTO struct {
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Kind                  string `json:"kind"`
+	SearchURL             string `json:"searchUrl"`
+	ParseURL              string `json:"parseUrl"`
+	Enabled               bool   `json:"enabled"`
+	Sort                  int    `json:"sort"`
+	Note                  string `json:"note"`
+	CreatedAt             int64  `json:"createdAt"`
+	UpdatedAt             int64  `json:"updatedAt"`
+	LastHealthStatus      string `json:"lastHealthStatus,omitempty"`
+	LastHealthAt          int64  `json:"lastHealthAt,omitempty"`
+	LastHealthError       string `json:"lastHealthError,omitempty"`
+	LastHealthResponseMs  int64  `json:"lastHealthResponseMs,omitempty"`
+}
+
+func mapParseSource(s *catalog.ParseSource) parseSourceDTO {
+	if s == nil {
+		return parseSourceDTO{}
+	}
+	return parseSourceDTO{
+		ID:                    s.ID,
+		Name:                  s.Name,
+		Kind:                  s.Kind,
+		SearchURL:             s.SearchURL,
+		ParseURL:              s.ParseURL,
+		Enabled:               s.Enabled,
+		Sort:                  s.Sort,
+		Note:                  s.Note,
+		CreatedAt:             s.CreatedAt,
+		UpdatedAt:             s.UpdatedAt,
+		LastHealthStatus:      s.LastHealthStatus,
+		LastHealthAt:          s.LastHealthAt,
+		LastHealthError:       s.LastHealthError,
+		LastHealthResponseMs:  s.LastHealthResponseMs,
+	}
+}
+
+func (a *AdminServer) handleListParseSources(w http.ResponseWriter, r *http.Request) {
+	if a.Catalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("catalog not ready"))
+		return
+	}
+	sources, err := a.Catalog.ListParseSources(r.Context(), false)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]parseSourceDTO, 0, len(sources))
+	for _, s := range sources {
+		out = append(out, mapParseSource(s))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+type upsertParseSourceReq struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	SearchURL string `json:"searchUrl"`
+	ParseURL  string `json:"parseUrl"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+	Sort      *int   `json:"sort,omitempty"`
+	Note      string `json:"note"`
+}
+
+func (a *AdminServer) handleUpsertParseSource(w http.ResponseWriter, r *http.Request) {
+	if a.Catalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("catalog not ready"))
+		return
+	}
+	var req upsertParseSourceReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid json: %w", err))
+		return
+	}
+	s := &catalog.ParseSource{
+		ID:        strings.TrimSpace(req.ID),
+		Name:      strings.TrimSpace(req.Name),
+		Kind:      strings.TrimSpace(req.Kind),
+		SearchURL: req.SearchURL,
+		ParseURL:  req.ParseURL,
+		Note:      req.Note,
+	}
+	if req.Enabled != nil {
+		s.Enabled = *req.Enabled
+	} else {
+		s.Enabled = true
+	}
+	if req.Sort != nil {
+		s.Sort = *req.Sort
+	}
+	if err := a.Catalog.UpsertParseSource(r.Context(), s); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mapParseSource(s))
+}
+
+func (a *AdminServer) handleDeleteParseSource(w http.ResponseWriter, r *http.Request) {
+	if a.Catalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("catalog not ready"))
+		return
+	}
+	id := routeParam(r, "id")
+	if err := a.Catalog.DeleteParseSource(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleRunHealthCheck 立即跑一次健康检查（同步等结果）。
+// 异步版本可以用 202 + 任务 ID，但小规模下同步更直接，前端轮询即可。
+type parseSourceHealthChecker interface {
+	RunAll(ctx context.Context)
+}
+
+func (a *AdminServer) handleRunHealthCheck(w http.ResponseWriter, r *http.Request) {
+	checker, ok := a.HealthChecker.(parseSourceHealthChecker)
+	if !ok || checker == nil {
+		writeErr(w, http.StatusServiceUnavailable,
+			fmt.Errorf("health checker not configured"))
+		return
+	}
+	// 同步等待（前端可设稍长的超时）
+	checker.RunAll(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---------- 资源站 ----------
+
+type resourceSiteDTO struct {
+	catalog.ResourceSite
+}
+
+type resourceSiteUpsertRequest struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	APIURL      string `json:"apiUrl"`
+	PlayURLMode string `json:"playUrlMode"`
+	Enabled     *bool  `json:"enabled"`
+	Sort        int    `json:"sort"`
+	Note        string `json:"note"`
+}
+
+func (a *AdminServer) handleListResourceSites(w http.ResponseWriter, r *http.Request) {
+	if a.Catalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("catalog not ready"))
+		return
+	}
+	sites, err := a.Catalog.ListResourceSites(r.Context(), false)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]*catalog.ResourceSite, 0, len(sites))
+	for _, s := range sites {
+		if s != nil {
+			out = append(out, s)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+func (a *AdminServer) handleUpsertResourceSite(w http.ResponseWriter, r *http.Request) {
+	if a.Catalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("catalog not ready"))
+		return
+	}
+	var req resourceSiteUpsertRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid json: %w", err))
+		return
+	}
+	site := &catalog.ResourceSite{
+		ID:          strings.TrimSpace(req.ID),
+		Name:        strings.TrimSpace(req.Name),
+		APIURL:      strings.TrimSpace(req.APIURL),
+		PlayURLMode: strings.TrimSpace(req.PlayURLMode),
+		Enabled:     true,
+		Sort:        req.Sort,
+		Note:        req.Note,
+	}
+	if req.Enabled != nil {
+		site.Enabled = *req.Enabled
+	}
+	if err := a.Catalog.UpsertResourceSite(r.Context(), site); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, site)
+}
+
+func (a *AdminServer) handleDeleteResourceSite(w http.ResponseWriter, r *http.Request) {
+	if a.Catalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("catalog not ready"))
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("id is required"))
+		return
+	}
+	if err := a.Catalog.DeleteResourceSite(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *AdminServer) handleAdminListImageSets(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	size, _ := strconv.Atoi(q.Get("size"))
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 || size > 100 {
+		size = 100
+	}
+	items, total, err := a.Catalog.ListImageSets(r.Context(), catalog.ListImageSetsParams{
+		Keyword:       q.Get("keyword"),
+		Page:          page,
+		PageSize:      size,
+		IncludeHidden: true,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": total,
+		"page":  page,
+		"size":  size,
+	})
+}
+
+func (a *AdminServer) handleDeleteImageSet(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid image set id"))
+		return
+	}
+	var body deleteVideoReq
+	if r.Body != nil {
+		defer r.Body.Close()
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	var (
+		result DeleteImageSetResult
+		err    error
+	)
+	if a.OnDeleteImageSet != nil {
+		result, err = a.OnDeleteImageSet(r.Context(), id, body.DeleteSource)
+	} else {
+		err = a.Catalog.DeleteImageSet(r.Context(), id)
+		result = DeleteImageSetResult{OK: err == nil}
+	}
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !result.OK {
+		result.OK = true
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *AdminServer) handleAdminListNovels(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	size, _ := strconv.Atoi(q.Get("size"))
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 || size > 100 {
+		size = 100
+	}
+	items, total, err := a.Catalog.ListNovelSets(r.Context(), catalog.ListNovelSetsParams{
+		Keyword:       q.Get("keyword"),
+		Page:          page,
+		PageSize:      size,
+		IncludeHidden: true,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": total,
+		"page":  page,
+		"size":  size,
+	})
+}
+
+func (a *AdminServer) handleDeleteNovel(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid novel id"))
+		return
+	}
+	var body deleteVideoReq
+	if r.Body != nil {
+		defer r.Body.Close()
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	var (
+		result DeleteNovelSetResult
+		err    error
+	)
+	if a.OnDeleteNovelSet != nil {
+		result, err = a.OnDeleteNovelSet(r.Context(), id, body.DeleteSource)
+	} else {
+		err = a.Catalog.DeleteNovelSet(r.Context(), id)
+		result = DeleteNovelSetResult{OK: err == nil}
+	}
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !result.OK {
+		result.OK = true
+	}
+	writeJSON(w, http.StatusOK, result)
 }

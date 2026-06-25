@@ -5,9 +5,16 @@ import { RequireAuth } from "@/admin/RequireAuth";
 
 const HomePage = lazy(() => import("@/pages/HomePage"));
 const ListingPage = lazy(() => import("@/pages/ListingPage"));
+const AudioListingPage = lazy(() => import("@/pages/AudioListingPage"));
 const ShortsPage = lazy(() => import("@/pages/ShortsPage"));
 const UploadPage = lazy(() => import("@/pages/UploadPage"));
 const VideoDetailPage = lazy(() => import("@/pages/VideoDetailPage"));
+const GalleriesPage = lazy(() => import("@/pages/GalleriesPage"));
+const GalleryDetailPage = lazy(() => import("@/pages/GalleryDetailPage"));
+const NovelsPage = lazy(() => import("@/pages/NovelsPage"));
+const NovelDetailPage = lazy(() => import("@/pages/NovelDetailPage"));
+const AnimeParsePage = lazy(() => import("@/pages/AnimeParsePage"));
+const SearchPage = lazy(() => import("@/pages/SearchPage"));
 
 const LoginPage = lazy(() =>
   import("@/admin/LoginPage").then((module) => ({ default: module.LoginPage }))
@@ -34,6 +41,26 @@ const TagsPage = lazy(() =>
 const ThemePage = lazy(() =>
   import("@/admin/ThemePage").then((module) => ({ default: module.ThemePage }))
 );
+const ParseSourcesPage = lazy(() =>
+  import("@/admin/ParseSourcesPage").then((module) => ({
+    default: module.ParseSourcesPage,
+  }))
+);
+const ResourceSitesPage = lazy(() =>
+  import("@/admin/ResourceSitesPage").then((module) => ({
+    default: module.ResourceSitesPage,
+  }))
+);
+const ImageSetsPage = lazy(() =>
+  import("@/admin/ImageSetsPage").then((module) => ({
+    default: module.ImageSetsPage,
+  }))
+);
+const NovelsAdminPage = lazy(() =>
+  import("@/admin/NovelsAdminPage").then((module) => ({
+    default: module.NovelsAdminPage,
+  }))
+);
 
 export default function App() {
   return (
@@ -54,10 +81,26 @@ export default function App() {
             }
           />
           <Route
+            path="/search"
+            element={
+              <RequireAuth>
+                <SearchPage />
+              </RequireAuth>
+            }
+          />
+          <Route
             path="/list"
             element={
               <RequireAuth>
                 <ListingPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/audio"
+            element={
+              <RequireAuth>
+                <AudioListingPage />
               </RequireAuth>
             }
           />
@@ -85,6 +128,46 @@ export default function App() {
               </RequireAuth>
             }
           />
+          <Route
+            path="/galleries"
+            element={
+              <RequireAuth>
+                <GalleriesPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/gallery/:id"
+            element={
+              <RequireAuth>
+                <GalleryDetailPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/novels"
+            element={
+              <RequireAuth>
+                <NovelsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/novel/:id"
+            element={
+              <RequireAuth>
+                <NovelDetailPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/anime"
+            element={
+              <RequireAuth>
+                <AnimeParsePage />
+              </RequireAuth>
+            }
+          />
 
           {/* 管理后台也需要登录 */}
           <Route
@@ -101,6 +184,10 @@ export default function App() {
             <Route path="videos" element={<VideosPage />} />
             <Route path="tags" element={<TagsPage />} />
             <Route path="theme" element={<ThemePage />} />
+            <Route path="parse-sources" element={<ParseSourcesPage />} />
+            <Route path="resource-sites" element={<ResourceSitesPage />} />
+            <Route path="image-sets" element={<ImageSetsPage />} />
+            <Route path="novels" element={<NovelsAdminPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

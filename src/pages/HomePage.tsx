@@ -5,7 +5,8 @@ import { SearchPanel } from "@/components/SearchPanel";
 import { TagCloud } from "@/components/TagCloud";
 import { SectionHeader } from "@/components/SectionHeader";
 import { VideoGrid } from "@/components/VideoGrid";
-import { fetchHomeVideos, fetchListing } from "@/data/videos";
+import { ContinueWatchingRail } from "@/components/ContinueWatchingRail";
+import { fetchContinueWatching, fetchHomeVideos, fetchListing } from "@/data/videos";
 import type { VideoItem } from "@/types";
 
 const DESKTOP_COUNT = 12;
@@ -60,12 +61,13 @@ function rememberHomeVideos(items: VideoItem[]) {
 export default function HomePage() {
   const [rankingVideos, setRankingVideos] = useState<VideoItem[]>(cachedRanking ?? []);
   const [latestVideos, setLatestVideos] = useState<VideoItem[]>(cachedLatest ?? []);
+  const [continueWatching, setContinueWatching] = useState<VideoItem[]>([]);
   const [rankingLoading, setRankingLoading] = useState(cachedRanking === null);
   const [latestLoading, setLatestLoading] = useState(cachedLatest === null);
   const isMobile = useIsMobile();
 
   useEffect(() => {
-    document.title = "首页 · 91";
+    document.title = "首页 · 61";
 
     let active = true;
 
@@ -97,6 +99,13 @@ export default function HomePage() {
         });
     }
 
+    // 继续观看：低调加载，失败就当没有
+    fetchContinueWatching()
+      .then((items) => {
+        if (active) setContinueWatching(items);
+      })
+      .catch(() => undefined);
+
     return () => { active = false; };
   }, []);
 
@@ -106,6 +115,8 @@ export default function HomePage() {
 
   return (
     <AppShell mobileAutoHideNav>
+      <ContinueWatchingRail videos={continueWatching} />
+
       <div className="container page-section">
         <PromoStrip />
         <SearchPanel />

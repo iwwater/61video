@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_NAME="${APP_NAME:-video-site-91}"
-GITHUB_REPO="${GITHUB_REPO:-nianzhibai/91}"
-INSTALL_PATH="${INSTALL_PATH:-/opt/video-site-91}"
-SERVICE_NAME="${SERVICE_NAME:-video-site-91}"
+APP_NAME="${APP_NAME:-video-site-61}"
+GITHUB_REPO="${GITHUB_REPO:-iwwater/61video}"
+INSTALL_PATH="${INSTALL_PATH:-/opt/video-site-61}"
+SERVICE_NAME="${SERVICE_NAME:-video-site-61}"
 FRONTEND_PORT_WAS_SET="${FRONTEND_PORT+x}"
-FRONTEND_PORT="${FRONTEND_PORT:-9191}"
+FRONTEND_PORT="${FRONTEND_PORT:-6191}"
 VERSION="${VERSION:-latest}"
 GH_PROXY="${GH_PROXY:-}"
 CONFIGURE_UFW="${CONFIGURE_UFW:-1}"
@@ -19,7 +19,7 @@ VIDEO_SITE_SKIP_SELF_UPDATE="${VIDEO_SITE_SKIP_SELF_UPDATE:-0}"
 SERVICE_READY_TIMEOUT="${SERVICE_READY_TIMEOUT:-90}"
 VERSION_FILE="$INSTALL_PATH/.version"
 MANAGER_PATH="/usr/local/sbin/${APP_NAME}-manager"
-COMMAND_LINK="/usr/local/bin/91"
+COMMAND_LINK="/usr/local/bin/61"
 APP_COMMAND_LINK="/usr/local/bin/${APP_NAME}"
 
 RED='\033[1;31m'
@@ -45,11 +45,11 @@ usage() {
   cat <<EOF
 Usage:
   sudo bash install.sh [install]
-  91 [update|restart|stop|status|logs|uninstall]
+  61 [update|restart|stop|status|logs|uninstall]
 
 Default action:
   install.sh with no args downloads the prebuilt release package and starts the service.
-  91 with no args opens the management menu.
+  61 with no args opens the management menu.
 
 Actions:
   install    Install to $INSTALL_PATH
@@ -78,16 +78,16 @@ Options via environment:
 Examples:
   sudo bash install.sh
   FRONTEND_PORT=8080 sudo -E bash install.sh
-  91
-  91 update
-  91 logs
+  61
+  61 update
+  61 logs
 EOF
 }
 
 is_manager_invocation() {
   local name
   name="$(basename "$0")"
-  [[ "$name" == "91" || "$name" == "$APP_NAME" || "$name" == "$(basename "$MANAGER_PATH")" ]]
+  [[ "$name" == "61" || "$name" == "91" || "$name" == "$APP_NAME" || "$name" == "$(basename "$MANAGER_PATH")" ]]
 }
 
 need_root() {
@@ -243,7 +243,7 @@ prepare_config() {
 write_service() {
   cat >"/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=Video Site 91
+Description=Video Site 61
 After=network-online.target
 Wants=network-online.target
 
@@ -378,7 +378,7 @@ append_unique() {
 app_service_names() {
   local names=()
   local name
-  for name in "$SERVICE_NAME" "$APP_NAME" video-site-91 video-site-backend video-site-frontend; do
+  for name in "$SERVICE_NAME" "$APP_NAME" video-site-61 video-site-backend video-site-frontend; do
     [[ -n "$name" ]] || continue
     if append_unique "$name" "${names[@]}" >/dev/null; then
       names+=("$name")
@@ -403,7 +403,7 @@ remove_app_containers() {
 
   local names=()
   local name
-  for name in "$SERVICE_NAME" "$APP_NAME" video-site-91; do
+  for name in "$SERVICE_NAME" "$APP_NAME" video-site-61; do
     [[ -n "$name" ]] || continue
     if append_unique "$name" "${names[@]}" >/dev/null; then
       names+=("$name")
@@ -440,7 +440,7 @@ process_looks_like_app() {
   [[ "$cmd" == *"$INSTALL_PATH"* ]] && return 0
   [[ "$cmd" == *"VIDEO_FRONTEND_DIR=$INSTALL_PATH/dist"* ]] && return 0
   [[ "$cmd" == *"VIDEO_CONFIG=$INSTALL_PATH/config.yaml"* ]] && return 0
-  [[ "$cmd" == *"video-site-91"* ]] && return 0
+  [[ "$cmd" == *"video-site-61"* ]] && return 0
   return 1
 }
 
@@ -502,7 +502,7 @@ confirm_uninstall_app() {
   fi
 
   local confirm=""
-  printf '确认卸载 91 吗？这会停止服务、移除管理命令，并可选择是否删除项目文件。[y/N]: ' >/dev/tty
+  printf '确认卸载 61 吗？这会停止服务、移除管理命令，并可选择是否删除项目文件。[y/N]: ' >/dev/tty
   IFS= read -r confirm </dev/tty || confirm=""
   case "$confirm" in
     [yY]) return 0 ;;
@@ -613,7 +613,7 @@ target_version() {
   local body version effective_url
   body="$(curl -fsSL \
     -H "Accept: application/vnd.github+json" \
-    -H "User-Agent: video-site-91-installer" \
+    -H "User-Agent: video-site-61-installer" \
     "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null || true)"
   version="$(printf '%s\n' "$body" \
     | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
@@ -677,7 +677,7 @@ show_success() {
   echo "数据：  $INSTALL_PATH/data"
   echo
   echo "首次访问后台时会要求设置管理员用户名和密码。"
-  echo "管理命令：91 或 91 status | logs | update | restart | stop"
+  echo "管理命令：61 或 61 status | logs | update | restart | stop"
 }
 
 install_app() {
@@ -743,7 +743,7 @@ uninstall_app() {
   confirm_uninstall_app || return 1
 
   listen_port="$(listen_port_from_config)"
-  for port in "$listen_port" "$FRONTEND_PORT" 9191 9192; do
+  for port in "$listen_port" "$FRONTEND_PORT" 6191 6192; do
     [[ "$port" =~ ^[0-9]+$ ]] || continue
     if append_unique "$port" "${ports[@]}" >/dev/null; then
       ports+=("$port")
@@ -773,15 +773,15 @@ show_menu() {
 
   while true; do
     clear
-    echo "欢迎使用 91 管理脚本"
+    echo "欢迎使用 61 管理脚本"
     echo
     echo "基础功能："
     echo "1、查看状态"
     echo "2、查看日志"
-    echo "3、更新 91"
-    echo "4、重启 91"
-    echo "5、停止 91"
-    echo "6、卸载 91"
+    echo "3、更新 61"
+    echo "4、重启 61"
+    echo "5、停止 61"
+    echo "6、卸载 61"
     echo "0、退出"
     echo
     read -r -p "请输入选项 [0-6]: " choice

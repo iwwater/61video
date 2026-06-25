@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
+import { Music4 } from "lucide-react";
 import type { PreviewState, VideoItem } from "@/types";
 import { formatCount } from "@/lib/format";
 import { previewController } from "@/lib/previewController";
@@ -66,6 +67,7 @@ function RecommendedItem({ video }: { video: VideoItem }) {
 
   const activeId = useActivePreviewId();
   const inView = useInViewport(rootRef);
+  const isAudio = video.mediaType === "audio";
 
   // 全局预览换卡时立即清理
   useEffect(() => {
@@ -129,6 +131,7 @@ function RecommendedItem({ video }: { video: VideoItem }) {
   }
 
   function startPreviewIntent() {
+    if (isAudio) return;
     if (!inView) return;
     if (hoverTimerRef.current) return;
     setPreviewState("intent");
@@ -139,6 +142,7 @@ function RecommendedItem({ video }: { video: VideoItem }) {
   }
 
   function startPreviewNow(options: { requireInView: boolean }) {
+    if (isAudio) return;
     if (options.requireInView && !inView) return;
     if (hoverTimerRef.current) {
       window.clearTimeout(hoverTimerRef.current);
@@ -200,8 +204,14 @@ function RecommendedItem({ video }: { video: VideoItem }) {
         onClickCapture={handleClickCapture}
       >
         <div className="vd-rail__thumb">
-          <img src={video.thumbnail} alt={video.title} loading="lazy" />
-          {shouldRenderPreview && (
+          {video.thumbnail ? (
+            <img src={video.thumbnail} alt={video.title} loading="lazy" />
+          ) : (
+            <div className="thumb-placeholder thumb-placeholder--audio thumb-placeholder--rail" aria-hidden="true">
+              <Music4 size={28} />
+            </div>
+          )}
+          {shouldRenderPreview && !isAudio && (
             <PreviewVideo
               ref={videoRef}
               src={video.previewSrc}
@@ -211,13 +221,13 @@ function RecommendedItem({ video }: { video: VideoItem }) {
               onTimeUpdate={(p) => setProgress(p)}
             />
           )}
-          {previewState === "loading" && (
+          {previewState === "loading" && !isAudio && (
             <span className="preview-loader" />
           )}
-          {previewState === "error" && (
+          {previewState === "error" && !isAudio && (
             <span className="preview-error">预览加载失败</span>
           )}
-          {previewState === "playing" && (
+          {previewState === "playing" && !isAudio && (
             <div className="preview-progress" aria-hidden="true">
               <div
                 className="preview-progress__bar"

@@ -20,7 +20,7 @@ func TestWriteAdminCredentialsUpdatesConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 server:
-  listen: "127.0.0.1:9192"
+  listen: "127.0.0.1:6192"
   admin:
     username: "admin"
     password: "admin123"
@@ -44,7 +44,7 @@ storage:
 	if cfg.Server.Admin.Password != "new-secret" {
 		t.Fatalf("password = %q, want new-secret", cfg.Server.Admin.Password)
 	}
-	if cfg.Server.Listen != "127.0.0.1:9192" {
+	if cfg.Server.Listen != "127.0.0.1:6192" {
 		t.Fatalf("listen = %q, want preserved value", cfg.Server.Listen)
 	}
 	if cfg.Storage.DBPath != "./data/video-site.db" {

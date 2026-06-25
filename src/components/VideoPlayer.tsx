@@ -15,10 +15,20 @@ type Props = {
   previewSrc?: string;
   title: string;
   /**
+   * 续播起始时间（秒）。如果传了，播放器加载完成后会自动跳到这个位置。
+   * 一般从后端的 progress_seconds 字段读。
+   */
+  initialTime?: number;
+  /**
    * 用户首次按下播放时触发。同一个 VideoPlayer 实例只会触发一次；
    * 后续暂停-继续不会重复触发。换 src 时会重置（详情页切换视频用）。
    */
   onFirstPlay?: () => void;
+  /**
+   * 播放进度定时上报。约每 5 秒一次，参数为当前 currentTime（秒）。
+   * 父组件负责调 POST /api/video/{id}/progress 持久化。
+   */
+  onProgress?: (seconds: number) => void;
 };
 
 type PlayerError = {
@@ -115,6 +125,7 @@ const COMPACT_SETTING_LAYOUT = {
   itemHeight: 30,
 };
 const ORIENTATION_CONTROL_NAME = "orientationToggle";
+const PIP_CONTROL_NAME = "pipToggle";
 const MANUAL_ORIENTATION_CLASS = "art-manual-orientation";
 const FAST_RATE_CLASS = "art-fast-rate-active";
 const FAST_RATE_HINT_CLASS = "video-player__art-rate-hint";
@@ -138,12 +149,15 @@ export function VideoPlayer({
   poster,
   previewSrc,
   title,
+  initialTime,
   onFirstPlay,
+  onProgress,
 }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const artRef = useRef<Artplayer | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const onFirstPlayRef = useRef<Props["onFirstPlay"]>(onFirstPlay);
+  const onProgressRef = useRef<Props["onProgress"]>(onProgress);
   const playedRef = useRef(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const [playerError, setPlayerError] = useState<PlayerError | null>(null);
@@ -153,7 +167,8 @@ export function VideoPlayer({
 
   useEffect(() => {
     onFirstPlayRef.current = onFirstPlay;
-  }, [onFirstPlay]);
+    onProgressRef.current = onProgress;
+  }, [onFirstPlay, onProgress]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -168,9 +183,11 @@ export function VideoPlayer({
       src,
       poster,
       title,
+      initialTime,
       artRef,
       playedRef,
       onFirstPlayRef,
+      onProgressRef,
       onFastChange: noop,
       onError: setPlayerError,
       onPreviewHover: setPreviewHover,
@@ -311,9 +328,11 @@ function mountArtPlayer({
   src,
   poster,
   title,
+  initialTime,
   artRef,
   playedRef,
   onFirstPlayRef,
+  onProgressRef,
   onFastChange,
   onError,
   onPreviewHover,
@@ -323,9 +342,11 @@ function mountArtPlayer({
   src: string;
   poster: string;
   title: string;
+  initialTime?: number;
   artRef: MutableRefObject<Artplayer | null>;
   playedRef: MutableRefObject<boolean>;
   onFirstPlayRef: MutableRefObject<Props["onFirstPlay"]>;
+  onProgressRef: MutableRefObject<Props["onProgress"]>;
   onFastChange: (active: boolean) => void;
   onError: (error: PlayerError | null) => void;
   onPreviewHover: (hover: PreviewHover | null) => void;
@@ -353,7 +374,7 @@ function mountArtPlayer({
     aspectRatio: true,
     setting: true,
     hotkey: true,
-    pip: true,
+    pip: false,
     mutex: true,
     fullscreen: true,
     fullscreenWeb: !enableOrientationControl,
@@ -373,7 +394,11 @@ function mountArtPlayer({
       playsInline: true,
     },
     settings: [createLoopSetting()],
-    controls: enableOrientationControl ? [createOrientationControl()] : [],
+    controls: (() => {
+      const list = [createPipControl()];
+      if (enableOrientationControl) list.push(createOrientationControl());
+      return list;
+    })(),
     contextmenu: [],
     cssVar: {
       "--art-theme": "var(--video-player-progress)",
@@ -396,6 +421,36 @@ function mountArtPlayer({
   video.playbackRate = DEFAULT_SETTINGS.playbackRate;
   applyPlayerBrightness(art, DEFAULT_SETTINGS.brightness);
   art.url = src;
+
+  // 续播：等 loadedmetadata 拿到 duration，跳到 initialTime（如果给了）
+  if (typeof initialTime === "number" && initialTime > 1) {
+    const seekOnReady = () => {
+      try {
+        art.currentTime = initialTime;
+      } catch {
+        /* ignore */
+      }
+    };
+    if (video.readyState >= 1 /* HAVE_METADATA */) {
+      seekOnReady();
+    } else {
+      video.addEventListener("loadedmetadata", seekOnReady, { once: true });
+    }
+  }
+
+  // 播放进度定时上报（每 5s 一次；进度 <= 1s 或快到结尾时跳过避免无意义写入）
+  let lastReportedTime = -1;
+  const progressInterval = window.setInterval(() => {
+    if (!artRef.current || artRef.current.isDestroy) return;
+    const t = artRef.current.currentTime;
+    const dur = artRef.current.duration;
+    if (!Number.isFinite(t) || t < 1) return;
+    if (Number.isFinite(dur) && t >= dur - 30) return; // 接近结尾不再报
+    // 避免重复报相同值（拖动时可能不变）
+    if (Math.abs(t - lastReportedTime) < 0.5) return;
+    lastReportedTime = t;
+    onProgressRef.current?.(t);
+  }, 5000);
 
   function preventContextMenu(event: Event) {
     event.preventDefault();
@@ -472,6 +527,7 @@ function mountArtPlayer({
     unbindOrientationToggle();
     setPlayerFastRateHint(art, false);
     mount.removeEventListener("contextmenu", preventContextMenu);
+    window.clearInterval(progressInterval);
     destroyHls(video);
     art.off("video:loadstart", handleLoadStart);
     art.off("video:loadeddata", handleReady);
@@ -644,6 +700,128 @@ function playerGestureHudIcon(kind: PlayerGestureHudKind, value: string) {
 
 function noop() {
   // noop
+}
+
+type PipSupportKind = "native" | "webkit" | "none";
+
+function detectPipSupport(): PipSupportKind {
+  if (typeof document === "undefined") return "none";
+  if (document.pictureInPictureEnabled) return "native";
+  const probe = document.createElement("video");
+  if (
+    typeof (probe as HTMLVideoElement & {
+      webkitSetPresentationMode?: unknown;
+    }).webkitSetPresentationMode === "function"
+  ) {
+    return "webkit";
+  }
+  return "none";
+}
+
+const PIP_ICON_SVG = `
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <rect x="3.2" y="4.6" width="17.6" height="13.4" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <rect x="12.4" y="11.4" width="8.4" height="6.6" rx="1.4" fill="currentColor" fill-opacity=".18" stroke="currentColor" stroke-width="1.8"/>
+  </svg>
+`;
+
+function createPipControl(): NonNullable<Option["controls"]>[number] {
+  const support = detectPipSupport();
+  const unsupported = support === "none";
+  return {
+    name: PIP_CONTROL_NAME,
+    position: "right",
+    index: 50,
+    tooltip: unsupported ? "画中画（当前浏览器不支持）" : "画中画",
+    html: `<span class="video-player__pip-icon" aria-hidden="true">${PIP_ICON_SVG}</span>`,
+    mounted(element) {
+      const button = element as HTMLElement;
+      button.setAttribute("role", "button");
+      button.setAttribute("tabindex", "0");
+      button.setAttribute("aria-pressed", "false");
+      button.setAttribute("aria-label", "画中画");
+      button.classList.toggle("is-unsupported", unsupported);
+
+      const video = this.video as HTMLVideoElement;
+      const setActive = (active: boolean) => {
+        button.classList.toggle("is-active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      };
+
+      const onEnter = () => setActive(true);
+      const onLeave = () => setActive(false);
+      video.addEventListener("enterpictureinpicture", onEnter);
+      video.addEventListener("leavepictureinpicture", onLeave);
+
+      // 初始同步：可能页面加载时已经在 PiP 中
+      if (typeof document !== "undefined") {
+        setActive(document.pictureInPictureElement === video);
+      }
+
+      const cleanup = () => {
+        video.removeEventListener("enterpictureinpicture", onEnter);
+        video.removeEventListener("leavepictureinpicture", onLeave);
+      };
+      this.once("destroy", cleanup);
+
+      this.events.proxy(button, "keydown", (event) => {
+        const k = event as KeyboardEvent;
+        if (k.key !== "Enter" && k.key !== " ") return;
+        k.preventDefault();
+        void togglePip(this, support);
+      });
+    },
+    click() {
+      void togglePip(this, support);
+    },
+  };
+}
+
+async function togglePip(art: Artplayer, support: PipSupportKind): Promise<void> {
+  if (support === "none") return;
+  const video = art.video as HTMLVideoElement;
+  try {
+    if (support === "native") {
+      if (document.pictureInPictureElement === video) {
+        await document.exitPictureInPicture();
+        return;
+      }
+      if (
+        document.pictureInPictureEnabled &&
+        typeof video.requestPictureInPicture === "function"
+      ) {
+        await video.requestPictureInPicture();
+      }
+      return;
+    }
+    // iOS Safari 走 webkit presentation mode
+    const v = video as HTMLVideoElement & {
+      webkitSupportsPresentationMode?: (mode: string) => boolean;
+      webkitSetPresentationMode?: (mode: string) => void;
+      webkitPresentationMode?: string;
+    };
+    if (v.webkitSupportsPresentationMode?.("picture-in-picture")) {
+      const next =
+        v.webkitPresentationMode === "picture-in-picture"
+          ? "inline"
+          : "picture-in-picture";
+      v.webkitSetPresentationMode?.(next);
+      // iOS 不发 enter/leave 事件，手动同步按钮状态
+      const button = art.controls?.[PIP_CONTROL_NAME] as HTMLElement | undefined;
+      button?.classList.toggle("is-active", next === "picture-in-picture");
+      button?.setAttribute(
+        "aria-pressed",
+        next === "picture-in-picture" ? "true" : "false"
+      );
+    }
+  } catch (err) {
+    const name = (err as DOMException | undefined)?.name;
+    // AbortError：用户在请求解析前就把 PiP 关了，可忽略
+    if (name !== "AbortError") {
+      // eslint-disable-next-line no-console
+      console.warn("[video] PiP toggle failed:", err);
+    }
+  }
 }
 
 function createOrientationControl(): NonNullable<Option["controls"]>[number] {

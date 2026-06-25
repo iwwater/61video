@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 
-APP_DIR="/opt/video-site-91"
+APP_DIR="/opt/video-site-61"
 DATA_DIR="${VIDEO_DATA_DIR:-$APP_DIR/data}"
 CONFIG="${VIDEO_CONFIG:-$DATA_DIR/config.yaml}"
 EXAMPLE="$APP_DIR/config.example.yaml"
-PORT="${VIDEO_LISTEN_PORT:-9191}"
+PORT="${VIDEO_LISTEN_PORT:-6191}"
 
 mkdir -p "$DATA_DIR" "$DATA_DIR/previews" "$DATA_DIR/uploads" "$DATA_DIR/spider91"
 

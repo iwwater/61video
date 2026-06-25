@@ -20,11 +20,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	_ "github.com/video-site/backend/internal/animeparser/extractors/universal"
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives"
+	"github.com/video-site/backend/internal/parsehealth"
 	"github.com/video-site/backend/internal/drives/googledrive"
 	"github.com/video-site/backend/internal/drives/guangyapan"
 	"github.com/video-site/backend/internal/drives/localstorage"
@@ -72,6 +74,10 @@ func main() {
 		log.Fatalf("open catalog: %v", err)
 	}
 	defer cat.Close()
+
+	if err := cat.InitSystemTags(context.Background()); err != nil {
+		log.Fatalf("init system tags: %v", err)
+	}
 
 	app := &App{
 		cfg:                cfg,
@@ -247,6 +253,12 @@ func main() {
 		OnDeleteVideo: func(reqCtx context.Context, videoID string, deleteSource bool) (api.DeleteVideoResult, error) {
 			return app.deleteVideo(reqCtx, videoID, deleteSource)
 		},
+		OnDeleteImageSet: func(reqCtx context.Context, imageSetID string, deleteSource bool) (api.DeleteImageSetResult, error) {
+			return app.deleteImageSet(reqCtx, imageSetID, deleteSource)
+		},
+		OnDeleteNovelSet: func(reqCtx context.Context, novelID string, deleteSource bool) (api.DeleteNovelSetResult, error) {
+			return app.deleteNovelSet(reqCtx, novelID, deleteSource)
+		},
 		GetDriveGenerationStatuses: func() map[string]api.DriveGenerationStatuses {
 			return app.driveGenerationStatuses()
 		},
@@ -285,6 +297,7 @@ func main() {
 		ListDriveDirChildren: func(reqCtx context.Context, driveID, parentID string) ([]api.DriveDirEntry, error) {
 			return app.listDriveDirChildren(reqCtx, driveID, parentID)
 		},
+		HealthChecker: app.healthChecker,
 	}
 
 	r := chi.NewRouter()
@@ -298,7 +311,7 @@ func main() {
 
 	// 凌晨流水线：每天 cron_hour 触发一次，串行跑
 	//   Phase 1 扫所有非 spider91 / localupload 网盘 + 删除检测 + 入队封面/预览视频
-	//   Phase 2 spider91 爬虫 + 入队预览视频
+	//   Phase 2 spider61 爬虫 + 入队预览视频
 	//   Phase 3 spider91 → 云盘迁移
 	// 也响应 admin "扫描所有网盘" 按钮（POST /admin/api/jobs/nightly/run → TriggerNow）。
 	app.nightlyRunner = nightly.New(nightly.Config{
@@ -314,6 +327,11 @@ func main() {
 		RunDedupeAssetCleanup: app.cleanupDuplicateVideoAssets,
 	})
 	go app.nightlyRunner.Run(ctx)
+
+	// 解析源健康检查：每 5 分钟 ping 一次，写回 DB
+	app.healthChecker = parsehealth.New(cat)
+	healthCancel := app.healthChecker.Start(ctx)
+	defer func() { _ = healthCancel; app.healthChecker.StopAll() }()
 
 	srv := &http.Server{
 		Addr:    cfg.Server.Listen,
@@ -368,9 +386,12 @@ type App struct {
 	// spider91Migrator 把 spider91 视频上传到目标 drive（PikPak、115、123、OneDrive、Google Drive、联通网盘或光鸭网盘）。
 	spider91Migrator spider91MigrationRunner
 
-	// nightlyRunner 是凌晨流水线调度器：每天 cron_hour 串行跑扫盘 → 91 爬虫 → 迁移。
+	// nightlyRunner 是凌晨流水线调度器：每天 cron_hour 串行跑扫盘 → 61 爬虫 → 迁移。
 	// 也响应 admin 「扫描所有网盘」按钮（TriggerNow）。
 	nightlyRunner *nightly.Runner
+
+	// healthChecker 周期 ping 解析/搜索源，把结果写回 DB。
+	healthChecker *parsehealth.Checker
 
 	// scanQueueMu 保护 scanQueued 和 scanProgress。
 	scanQueueMu sync.Mutex
@@ -2039,6 +2060,8 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 		return
 	}
 	sc := scanner.New(a.cat, drv, a.cfg.Scanner.VideoExtensions, d.SkipDirIDs, onNew)
+	sc.OnNewImageSet = nil // 图片无需后处理
+	sc.OnNewNovelSet = nil // 文档无需后处理
 	sc.OnProgress = func(stats scanner.Stats) {
 		a.updateDriveScanProgress(driveID, stats.Scanned, stats.Added)
 	}
@@ -2083,6 +2106,12 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) {
 			} else if removed > 0 {
 				log.Printf("[cleanup] removed %d stale videos for drive=%s kind=%s", removed, driveID, drv.Kind())
 			}
+			novelRemoved, err := a.cleanupMissingDriveNovels(ctx, driveID, stats.SeenFileIDs)
+			if err != nil {
+				log.Printf("[cleanup] stale novel cleanup drive=%s kind=%s error: %v", driveID, drv.Kind(), err)
+			} else if novelRemoved > 0 {
+				log.Printf("[cleanup] removed %d stale novels for drive=%s kind=%s", novelRemoved, driveID, drv.Kind())
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -2118,6 +2147,28 @@ func (a *App) cleanupMissingDriveVideos(ctx context.Context, driveID string, liv
 		}
 		if err := a.cat.DeleteVideo(ctx, v.ID); err != nil {
 			return removed, fmt.Errorf("delete catalog video %s: %w", v.ID, err)
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+// cleanupMissingDriveNovels 清理已在网盘上消失的小说（SourceID 对不上 SeenFileIDs）。
+func (a *App) cleanupMissingDriveNovels(ctx context.Context, driveID string, liveFileIDs map[string]struct{}) (int, error) {
+	items, err := a.cat.ListNovelSetsByDriveID(ctx, driveID)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, ns := range items {
+		if ns.SourceID == "" {
+			continue
+		}
+		if _, ok := liveFileIDs[ns.SourceID]; ok {
+			continue
+		}
+		if err := a.cat.DeleteNovelSet(ctx, ns.ID); err != nil {
+			return removed, fmt.Errorf("delete novel set %s: %w", ns.ID, err)
 		}
 		removed++
 	}
@@ -2279,6 +2330,114 @@ func (a *App) removeSpider91SourceFile(ctx context.Context, v *catalog.Video) (b
 		removeSpider91ThumbCandidates(src, sourceID)
 	}
 	return deleted, nil
+}
+
+// parseStreamFileID 解析 /p/stream/{driveID}/{fileID} 格式的代理 URL，
+// 返回 driveID 和 fileID。非此格式返回 ok=false。
+func parseStreamFileID(rawURL string) (driveID, fileID string, ok bool) {
+	s := strings.TrimSpace(rawURL)
+	const prefix = "/p/stream/"
+	if !strings.HasPrefix(s, prefix) {
+		return "", "", false
+	}
+	s = strings.TrimPrefix(s, prefix)
+	idx := strings.IndexByte(s, '/')
+	if idx <= 0 || idx >= len(s)-1 {
+		return "", "", false
+	}
+	return s[:idx], s[idx+1:], true
+}
+
+// removeSourceFileByID 按 driveID + fileID 删除源文件。
+// 返回 (是否删除成功, error)。drive 不支持删除时返回 false, nil。
+func (a *App) removeSourceFileByID(ctx context.Context, driveID, fileID string) (bool, error) {
+	if a == nil || a.registry == nil {
+		return false, fmt.Errorf("remove source file %s/%s: drive registry unavailable: %w", driveID, fileID, drives.ErrNotSupported)
+	}
+	if _, ok := a.registry.Get(driveID); !ok {
+		if a.cat == nil {
+			return false, fmt.Errorf("remove source file %s/%s: drive %s not attached: %w", driveID, fileID, driveID, drives.ErrNotSupported)
+		}
+		if err := a.ensureDriveAttached(ctx, driveID); err != nil {
+			return false, fmt.Errorf("remove source file %s/%s: attach drive %s: %w", driveID, fileID, driveID, err)
+		}
+	}
+	drv, ok := a.registry.Get(driveID)
+	if !ok {
+		return false, fmt.Errorf("remove source file %s/%s: drive %s not attached: %w", driveID, fileID, driveID, drives.ErrNotSupported)
+	}
+	remover, ok := drv.(drives.Remover)
+	if !ok {
+		return false, nil // drive 不支持删除，不是错误
+	}
+	if err := remover.Remove(ctx, fileID); err != nil {
+		return false, fmt.Errorf("remove source file %s from drive %s: %w", fileID, driveID, err)
+	}
+	return true, nil
+}
+
+func (a *App) deleteImageSet(ctx context.Context, imageSetID string, deleteSource bool) (api.DeleteImageSetResult, error) {
+	if a == nil || a.cat == nil {
+		return api.DeleteImageSetResult{}, sql.ErrNoRows
+	}
+	imgSet, err := a.cat.GetImageSet(ctx, imageSetID)
+	if err != nil {
+		return api.DeleteImageSetResult{}, err
+	}
+
+	deletedSource := false
+	if deleteSource {
+		for _, img := range imgSet.Images {
+			driveID, fileID, ok := parseStreamFileID(img.URL)
+			if !ok {
+				continue
+			}
+			removed, err := a.removeSourceFileByID(ctx, driveID, fileID)
+			if err != nil {
+				return api.DeleteImageSetResult{}, err
+			}
+			if removed {
+				deletedSource = true
+			}
+		}
+	}
+
+	if err := a.cat.DeleteImageSet(ctx, imgSet.ID); err != nil {
+		return api.DeleteImageSetResult{}, err
+	}
+	return api.DeleteImageSetResult{OK: true, DeletedSource: deletedSource}, nil
+}
+
+func (a *App) deleteNovelSet(ctx context.Context, novelID string, deleteSource bool) (api.DeleteNovelSetResult, error) {
+	if a == nil || a.cat == nil {
+		return api.DeleteNovelSetResult{}, sql.ErrNoRows
+	}
+	novel, err := a.cat.GetNovelSet(ctx, novelID)
+	if err != nil {
+		return api.DeleteNovelSetResult{}, err
+	}
+
+	deletedSource := false
+	if deleteSource {
+		for _, ch := range novel.Chapters {
+			driveID, fileID, ok := parseStreamFileID(ch.PDFURL)
+			if !ok {
+				continue
+			}
+			removed, err := a.removeSourceFileByID(ctx, driveID, fileID)
+			if err != nil {
+				return api.DeleteNovelSetResult{}, err
+			}
+			if removed {
+				deletedSource = true
+			}
+		}
+	}
+
+	if err := a.cat.DeleteNovelSet(ctx, novel.ID); err != nil {
+		return api.DeleteNovelSetResult{}, err
+	}
+	return api.DeleteNovelSetResult{OK: true, DeletedSource: deletedSource}, nil
 }
 
 func (a *App) spider91OriginFromVideo(ctx context.Context, v *catalog.Video) (string, string) {
@@ -2720,7 +2879,7 @@ func (a *App) enqueueUploadedVideo(ctx context.Context, v *catalog.Video) {
 	if thumbWorker != nil && v.ThumbnailURL == "" {
 		thumbWorker.Enqueue(v)
 	}
-	if worker != nil && a.teaserEnabledForDrive(ctx, v.DriveID) {
+	if worker != nil && v.PreviewStatus == "pending" && a.teaserEnabledForDrive(ctx, v.DriveID) {
 		worker.Enqueue(v)
 	}
 	if fingerprintWorker != nil {

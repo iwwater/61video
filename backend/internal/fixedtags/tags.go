@@ -5,6 +5,12 @@ import (
 	"unicode"
 )
 
+// Tag 是 system 标签的 label + 别名集合。systemtags 包在初始化时会读一份做种子。
+type Tag struct {
+	Label   string
+	Aliases []string
+}
+
 var Labels = []string{"后入", "奶子", "口交", "臀", "人妻", "女大", "AV"}
 
 var aliases = map[string][]string{
@@ -15,6 +21,18 @@ var aliases = map[string][]string{
 	"人妻": {"人妻", "妻子", "老婆", "太太", "少妇", "少熟", "熟女", "已婚", "良家", "人妇", "人夫", "wife", "housewife", "married", "married woman", "young wife", "milf"},
 	"女大": {"女大", "女大学生", "大学生", "女子大生", "大学", "女学生", "学生妹", "校花", "学妹", "校园", "大一", "大二", "大三", "大四", "college", "college student", "university", "university student", "campus", "coed"},
 	"AV": {"AV", "JAV", "番号", "番號"},
+}
+
+// DefaultSystemTags 返回内置默认的 system 标签集合，settings 表为空时作种子用。
+func DefaultSystemTags() []Tag {
+	out := make([]Tag, 0, len(Labels))
+	for _, label := range Labels {
+		out = append(out, Tag{
+			Label:   label,
+			Aliases: append([]string(nil), aliases[label]...),
+		})
+	}
+	return out
 }
 
 func AliasesFor(label string) []string {

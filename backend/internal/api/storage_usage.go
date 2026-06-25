@@ -7,8 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/storageusage"
 )
@@ -54,16 +52,4 @@ func collectLocalMediaStorage(ctx context.Context, cat *catalog.Catalog, localDi
 		})
 	}
 	return storageusage.Compute(localDir, assetRefs, driveIDs, localDiskStats)
-}
-
-func localDiskStats(path string) (storageusage.DiskStats, error) {
-	var stat unix.Statfs_t
-	if err := unix.Statfs(path, &stat); err != nil {
-		return storageusage.DiskStats{}, err
-	}
-	blockSize := uint64(stat.Bsize)
-	return storageusage.DiskStats{
-		AvailableBytes: int64(uint64(stat.Bavail) * blockSize),
-		CapacityBytes:  int64(uint64(stat.Blocks) * blockSize),
-	}, nil
 }

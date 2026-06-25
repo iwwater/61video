@@ -5,13 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export HOME="${HOME:-/root}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-export GOCACHE="${GOCACHE:-/tmp/video-site-91/go-build}"
+export GOCACHE="${GOCACHE:-/tmp/video-site-61/go-build}"
 
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
-FRONTEND_PORT="${FRONTEND_PORT:-9191}"
+FRONTEND_PORT="${FRONTEND_PORT:-6191}"
 FRONTEND_MODE="${FRONTEND_MODE:-preview}"
-BACKEND_PORT="${BACKEND_PORT:-9192}"
-LOG_DIR="${LOG_DIR:-/tmp/video-site-91}"
+BACKEND_PORT="${BACKEND_PORT:-6192}"
+LOG_DIR="${LOG_DIR:-/tmp/video-site-61}"
 
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 BACKEND_LOG="$LOG_DIR/backend.log"

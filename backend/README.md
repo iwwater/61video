@@ -68,16 +68,16 @@ go run ./cmd/server
 - `data/video-site.db`
 - `data/previews/`
 
-默认监听 `127.0.0.1:9192`。首次部署如果仍是默认管理员配置，登录页会要求先设置用户名和密码，并写回 `config.yaml`。如果本地已有旧的 `config.yaml`，请确认 `server.listen` 与前端代理端口一致。
+默认监听 `127.0.0.1:6192`。首次部署如果仍是默认管理员配置，登录页会要求先设置用户名和密码，并写回 `config.yaml`。如果本地已有旧的 `config.yaml`，请确认 `server.listen` 与前端代理端口一致。
 
 ### 连接前端
 
-`vite.config.ts` 已经把 `/api`、`/p`、`/admin/api` 代理到 `127.0.0.1:9192`。
+`vite.config.ts` 已经把 `/api`、`/p`、`/admin/api` 代理到 `127.0.0.1:6192`。
 
 ```
 npm run build       构建前端静态资源
-npm run preview     前端 9191，无热更新
-go run ./cmd/server 后端 9192
+npm run preview     前端 6191，无热更新
+go run ./cmd/server 后端 6192
 ```
 
 ## 添加一个盘

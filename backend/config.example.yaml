@@ -1,7 +1,7 @@
 # backend 配置示例。首次启动若未发现 config.yaml，会基于此文件自动创建。
 server:
   # 本地开发默认配合 vite.config.ts 的代理端口。
-  listen: "127.0.0.1:9192"
+  listen: "127.0.0.1:6192"
   # 管理后台用户。保留默认值时，首次访问登录页会要求设置新用户名和密码，
   # 并写回 backend/config.yaml。
   admin:
@@ -16,7 +16,7 @@ server:
   # 示例：
   # allowed_origins:
   #   - "https://video.example.com"
-  #   - "http://127.0.0.1:9191"
+  #   - "http://127.0.0.1:6191"
   allowed_origins: []
 
 storage:
@@ -33,7 +33,7 @@ scanner:
   # 单次扫描每家网盘目录递归层数上限
   max_depth: 5
   # 被扫描的扩展名
-  video_extensions: [".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm"]
+  video_extensions: [".mp4", ".mkv", ".mov", ".webm", ".avi", ".strm", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"]
 
 nightly:
   # 凌晨流水线触发整点（0-23），默认 1 即每天 01:00。

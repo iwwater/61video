@@ -12,7 +12,7 @@ export function SearchPanel() {
     const q = keyword.trim();
     const sp = new URLSearchParams();
     if (q) sp.set("q", q);
-    navigate(`/list?${sp.toString()}`);
+    navigate(`/search?${sp.toString()}`);
   }
 
   return (
@@ -25,7 +25,7 @@ export function SearchPanel() {
             type="text"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索视频标题或作者..."
+            placeholder="搜索视频、小说、资源站..."
             aria-label="搜索关键词"
           />
         </div>

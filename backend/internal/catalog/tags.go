@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/video-site/backend/internal/fixedtags"
 )
 
 var ErrUnknownTag = errors.New("unknown tag")
@@ -57,6 +55,9 @@ func (c *Catalog) migrate(ctx context.Context) error {
 	if err := c.addColumnIfMissing(ctx, "videos", "file_name", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := c.addColumnIfMissing(ctx, "videos", "media_type", "TEXT DEFAULT 'video'"); err != nil {
+		return err
+	}
 	if err := c.addColumnIfMissing(ctx, "videos", "hidden", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
@@ -67,6 +68,13 @@ func (c *Catalog) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := c.addColumnIfMissing(ctx, "videos", "last_viewed_at", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	// 观看进度：客户端每 5s 上报 currentTime。progress_at 用于"继续观看"排序。
+	if err := c.addColumnIfMissing(ctx, "videos", "progress_seconds", "REAL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := c.addColumnIfMissing(ctx, "videos", "progress_at", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
 	// videos.transcode_*：浏览器兼容性转码状态。
@@ -434,8 +442,11 @@ UPDATE videos
 }
 
 func (c *Catalog) seedSystemTags(ctx context.Context) error {
-	for _, label := range fixedtags.Labels {
-		if _, err := c.ensureTag(ctx, label, fixedtags.AliasesFor(label), "system"); err != nil {
+	if c.systemTags == nil {
+		return nil
+	}
+	for _, t := range c.systemTags.Snapshot() {
+		if _, err := c.ensureTag(ctx, t.Label, t.Aliases, "system"); err != nil {
 			return err
 		}
 	}
@@ -443,11 +454,17 @@ func (c *Catalog) seedSystemTags(ctx context.Context) error {
 }
 
 func (c *Catalog) classifySystemTags(ctx context.Context) error {
+	if c.systemTags == nil {
+		return nil
+	}
 	total := 0
-	for _, label := range fixedtags.Labels {
+	for _, label := range c.systemTags.Labels() {
 		tag, err := c.getTagByLabel(ctx, label)
 		if err != nil {
 			return err
+		}
+		if tag.ID == 0 {
+			continue
 		}
 		classified, err := c.classifyTag(ctx, tag)
 		if err != nil {
@@ -528,7 +545,7 @@ GROUP BY category`)
 	}
 	for _, stat := range categories {
 		if isAVCodePollutedLabel(stat.category) {
-			if _, err := c.ensureTag(ctx, avTagLabel, fixedtags.AliasesFor(avTagLabel), "system"); err != nil {
+			if _, err := c.ensureTag(ctx, avTagLabel, c.avAliases(), "system"); err != nil {
 				return err
 			}
 			if err := c.addTagToVideosByCategory(ctx, stat.category, avTagLabel, "auto"); err != nil {
@@ -851,7 +868,7 @@ func (c *Catalog) MatchTags(ctx context.Context, text string) ([]string, error) 
 func (c *Catalog) EnsureCollectionTag(ctx context.Context, label string) (string, bool, error) {
 	label = cleanTagLabel(label)
 	if isAVCodePollutedLabel(label) {
-		if _, err := c.ensureTag(ctx, avTagLabel, fixedtags.AliasesFor(avTagLabel), "system"); err != nil {
+		if _, err := c.ensureTag(ctx, avTagLabel, c.avAliases(), "system"); err != nil {
 			return "", false, err
 		}
 		if err := c.addTagToVideosByCategory(ctx, label, avTagLabel, "auto"); err != nil {
@@ -890,7 +907,7 @@ func (c *Catalog) ensureTag(ctx context.Context, label string, aliases []string,
 	}
 	if isAVCodePollutedLabel(label) {
 		label = avTagLabel
-		aliases = fixedtags.AliasesFor(avTagLabel)
+		aliases = c.avAliases()
 		source = "system"
 	}
 	if source == "" {
@@ -1133,7 +1150,7 @@ SELECT v.id
 }
 
 func (c *Catalog) collapseAVCodeTags(ctx context.Context) error {
-	if _, err := c.ensureTag(ctx, avTagLabel, fixedtags.AliasesFor(avTagLabel), "system"); err != nil {
+	if _, err := c.ensureTag(ctx, avTagLabel, c.avAliases(), "system"); err != nil {
 		return err
 	}
 

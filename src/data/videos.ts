@@ -10,10 +10,58 @@ export function fetchHomeVideos(excludeIds?: string[]): Promise<VideoItem[]> {
   return apiGet<VideoItem[]>(`/api/home${suffix}`).catch(() => []);
 }
 
+// "继续观看" rail 数据：最近 10 部看了一半的（5%~95% 进度）。
+export function fetchContinueWatching(): Promise<VideoItem[]> {
+  return apiGet<{ items: VideoItem[] }>(`/api/home/continue-watching`)
+    .then((d) => d.items ?? [])
+    .catch(() => []);
+}
+
+export type SearchItemType = "video" | "novel" | "source" | "resource";
+
+export interface UnifiedSearchItem {
+  type: SearchItemType;
+  id: string;
+  title: string;
+  subtitle?: string;
+  cover?: string;
+  href?: string;
+  url?: string;
+  source?: string;
+  directPlay?: boolean;
+  siteId?: string;
+  vodId?: string;
+  progressSeconds?: number;
+}
+
+export interface UnifiedSearchResult {
+  items: UnifiedSearchItem[];
+  query: string;
+  local: number;
+  remote: number;
+}
+
+export function fetchUnifiedSearch(
+  q: string,
+  include?: "local" | "external" | "local,external"
+): Promise<UnifiedSearchResult> {
+  const qs = new URLSearchParams({ q });
+  if (include) qs.set("include", include);
+  return apiGet<UnifiedSearchResult>(`/api/search?${qs.toString()}`);
+}
+
 export function fetchListing(
   page: number,
   pageSize: number,
-  params?: { q?: string; tag?: string; cat?: string; sort?: string; includeTotal?: boolean }
+  params?: {
+    q?: string;
+    tag?: string;
+    cat?: string;
+    /** "video" | "audio"。空或 "all" 表示不过滤。 */
+    mediaType?: string;
+    sort?: string;
+    includeTotal?: boolean;
+  }
 ): Promise<{ items: VideoItem[]; total: number }> {
   const qs = new URLSearchParams({
     page: String(page),
@@ -22,6 +70,9 @@ export function fetchListing(
   if (params?.q) qs.set("q", params.q);
   if (params?.tag) qs.set("tag", params.tag);
   if (params?.cat) qs.set("cat", params.cat);
+  if (params?.mediaType && params.mediaType !== "all") {
+    qs.set("media_type", params.mediaType);
+  }
   if (params?.sort) qs.set("sort", params.sort);
   if (params?.includeTotal === false) qs.set("count", "false");
   return apiGet<{ items: VideoItem[]; total: number }>(

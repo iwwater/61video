@@ -4,12 +4,12 @@ set -Eeuo pipefail
 SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-APP_NAME="${APP_NAME:-video-site-91}"
+APP_NAME="${APP_NAME:-video-site-61}"
 BACKEND_SERVICE="${BACKEND_SERVICE:-video-site-backend}"
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-video-site-frontend}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
-FRONTEND_PORT="${FRONTEND_PORT:-9191}"
-BACKEND_LISTEN="${BACKEND_LISTEN:-127.0.0.1:9192}"
+FRONTEND_PORT="${FRONTEND_PORT:-6191}"
+BACKEND_LISTEN="${BACKEND_LISTEN:-127.0.0.1:6192}"
 GO_VERSION="${GO_VERSION:-1.23.12}"
 INSTALL_DEPS="${INSTALL_DEPS:-1}"
 CONFIGURE_UFW="${CONFIGURE_UFW:-1}"
@@ -46,7 +46,7 @@ Actions:
   uninstall  Remove systemd services only; keep repo, config, and data
 
 Common overrides:
-  FRONTEND_PORT=9191      Public web port
+  FRONTEND_PORT=6191      Public web port
   FRONTEND_HOST=0.0.0.0   Public web bind address
   GO_VERSION=1.23.12
   INSTALL_DEPS=0          Do not install missing Node/Go/ffmpeg/Python runtime deps
@@ -353,7 +353,7 @@ show_summary() {
   log "deployment finished"
   echo "  frontend: http://<server-ip>:${FRONTEND_PORT}/"
   echo "  admin:    http://<server-ip>:${FRONTEND_PORT}/admin"
-  echo "  backend:  127.0.0.1:9192"
+  echo "  backend:  127.0.0.1:6192"
   echo
   echo "First visit will ask you to create the admin username and password."
   echo "Useful commands:"

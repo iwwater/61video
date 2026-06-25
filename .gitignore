@@ -24,11 +24,22 @@ tools/
 # 编译产物
 backend/server
 backend/server.*
+backend/video-server.exe
+backend/video-server.exe~
+backend/cmd/launcher/launcher.exe
+backend/cmd/seednovel/seednovel.exe
+61-start.exe
+61-start.exe.old
+61-start.exe~
 release/
 tsconfig.tsbuildinfo
 tmp/
 
-# 91 爬虫脚本独立运行时的默认输出文件（backend 跑时会显式 --output 到 backend/data/spider91/，所以不会落在这里）
+# 调试与本地运行产物
+.playwright-mcp/
+crawler-scripts/
+
+# 61 爬虫脚本独立运行时的默认输出文件（backend 跑时会显式 --output 到 backend/data/spider61/，所以不会落在这里）
 91porn_videos.json
 __pycache__/
 *.pyc
@@ -47,3 +58,17 @@ __pycache__/
 /image005.png
 /image006.png
 /image02.png
+
+# 爬虫相关（不外传）
+docs/
+crawler-scripts/
+
+# 视频文件（不外传实际内容）
+*.mp4
+*.mov
+*.webm
+*.avi
+*.mkv
+*.flv
+*.wmv
+*.m4v

@@ -3,6 +3,7 @@ import { CheckSquare, Film, Plus, RefreshCw, Search, Tags, Trash2 } from "lucide
 import * as api from "./api";
 import { useToast } from "./ToastContext";
 import { ConfirmModal } from "./ConfirmModal";
+import { SystemTagsPanel } from "./SystemTagsPanel";
 
 const DESKTOP_TAGS_PAGE_SIZE = 25;
 const MOBILE_TAGS_PAGE_SIZE = 8;
@@ -207,6 +208,8 @@ export function TagsPage() {
           <RefreshCw size={13} /> 刷新
         </button>
       </header>
+
+      <SystemTagsPanel />
 
       <div className="admin-tags-layout">
         {/* 左栏：创建与统计 */}
