@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { PromoStrip } from "@/components/PromoStrip";
@@ -157,6 +157,28 @@ export default function ListingPage({ forcedMediaType }: { forcedMediaType?: Med
     ? "音频"
     : "全部视频";
 
+  // 用 useCallback 稳定 handleSortChange / handleViewChange / handlePageChange 的引用，
+  // 这样 SortToolbar / VideoGrid / Pagination 加 memo 后才会真正生效。
+  const handleSortChange = useCallback((nextSort: SortKey) => {
+    pendingScrollYRef.current = 0;
+    setSort(nextSort);
+    setPage(1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const handleViewChange = useCallback((nextView: ViewMode) => {
+    setView(nextView);
+  }, []);
+
+  const handlePageChange = useCallback((nextPage: number) => {
+    pendingScrollYRef.current = 0;
+    setPage(nextPage);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  // 抽出模块级常量，避免每次 render 都构造新字符串 + 让 VideoGrid 能更准 memo。
+  const emptyText = mediaType === "audio" ? "没有找到匹配的音频" : "没有找到匹配的视频";
+
   function setMediaType(next: MediaType) {
     if (next === mediaType) return;
     const updated = new URLSearchParams(params);
@@ -215,34 +237,21 @@ export default function ListingPage({ forcedMediaType }: { forcedMediaType?: Med
         <SortToolbar
           sort={sort}
           view={view}
-          onSortChange={(nextSort) => {
-            pendingScrollYRef.current = 0;
-            setSort(nextSort);
-            setPage(1);
-            window.scrollTo({ top: 0, behavior: "smooth" });
-          }}
-          onViewChange={(nextView) => {
-            setView(nextView);
-          }}
+          onSortChange={handleSortChange}
+          onViewChange={handleViewChange}
         />
         <VideoGrid
           videos={items}
           loading={initialLoading}
           compact={view === "compact"}
           skeletonCount={12}
-          emptyText={
-            mediaType === "audio" ? "没有找到匹配的音频" : "没有找到匹配的视频"
-          }
+          emptyText={emptyText}
         />
         <Pagination
           page={page}
           pageSize={tag ? PAGE_SIZE_TAG : PAGE_SIZE_DEFAULT}
           total={total}
-          onChange={(p) => {
-            pendingScrollYRef.current = 0;
-            setPage(p);
-            window.scrollTo({ top: 0, behavior: "smooth" });
-          }}
+          onChange={handlePageChange}
         />
       </div>
     </AppShell>

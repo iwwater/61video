@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { LayoutGrid, List } from "lucide-react";
 import type { SortKey } from "@/types";
 
@@ -16,7 +17,7 @@ const sortOptions: { key: SortKey; label: string }[] = [
   { key: "recent", label: "最近观看" },
 ];
 
-export function SortToolbar({ sort, view, onSortChange, onViewChange }: Props) {
+function SortToolbarInner({ sort, view, onSortChange, onViewChange }: Props) {
   return (
     <div className="sort-toolbar" role="toolbar" aria-label="排序和视图">
       <div className="sort-toolbar__group">
@@ -55,5 +56,7 @@ export function SortToolbar({ sort, view, onSortChange, onViewChange }: Props) {
     </div>
   );
 }
+
+export const SortToolbar = memo(SortToolbarInner);
 
 export type { ViewMode };

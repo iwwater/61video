@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { VideoItem } from "@/types";
 import { VideoCard } from "./VideoCard";
 
@@ -10,7 +11,7 @@ type Props = {
   skeletonCount?: number;
 };
 
-export function VideoGrid({
+function VideoGridInner({
   videos,
   loading,
   compact,
@@ -40,3 +41,5 @@ export function VideoGrid({
     </div>
   );
 }
+
+export const VideoGrid = memo(VideoGridInner);

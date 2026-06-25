@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { Music4 } from "lucide-react";
 import type { PreviewState, VideoItem } from "@/types";
@@ -17,6 +17,37 @@ type Props = {
 };
 
 const HOVER_DELAY_MS = 300;
+// 预览进度回调节流：timeupdate 在浏览器里一帧多次触发，没必要逐帧 setState。
+const PREVIEW_TIMEUPDATE_THROTTLE_MS = 150;
+
+function throttleTrailing<T extends (...args: never[]) => void>(
+  fn: T,
+  wait: number
+): T {
+  let lastCall = 0;
+  let trailingTimer: number | null = null;
+  let trailingArgs: Parameters<T> | null = null;
+  const wrapped = ((...args: Parameters<T>) => {
+    const now = Date.now();
+    const remaining = wait - (now - lastCall);
+    trailingArgs = args;
+    if (remaining <= 0) {
+      lastCall = now;
+      fn(...args);
+      trailingArgs = null;
+    } else if (trailingTimer === null) {
+      trailingTimer = window.setTimeout(() => {
+        trailingTimer = null;
+        lastCall = Date.now();
+        if (trailingArgs) {
+          fn(...trailingArgs);
+          trailingArgs = null;
+        }
+      }, remaining);
+    }
+  }) as T;
+  return wrapped;
+}
 
 function useActivePreviewId(): string | null {
   return useSyncExternalStore(
@@ -26,7 +57,7 @@ function useActivePreviewId(): string | null {
   );
 }
 
-export function VideoCard({ video, priority = false }: Props) {
+function VideoCardInner({ video, priority = false }: Props) {
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
   const [shouldRenderPreview, setShouldRenderPreview] = useState(false);
   const [progress, setProgress] = useState(0); // 0~1
@@ -42,6 +73,12 @@ export function VideoCard({ video, priority = false }: Props) {
   const activeId = useActivePreviewId();
   const inView = useInViewport(rootRef);
   const isAudio = video.mediaType === "audio";
+
+  // 预览进度回调节流：timeupdate 在浏览器里一帧多次触发，没必要逐帧 setState。
+  const handlePreviewProgress = useMemo(
+    () => throttleTrailing((p: number) => setProgress(p), PREVIEW_TIMEUPDATE_THROTTLE_MS),
+    []
+  );
 
   // 当全局活跃卡片不是自己时，立刻停止预览
   useEffect(() => {
@@ -210,6 +247,8 @@ export function VideoCard({ video, priority = false }: Props) {
               className="thumb-image"
               src={thumbnailSrc}
               alt={video.title}
+              width={320}
+              height={180}
               loading={priority ? "eager" : "lazy"}
               onError={handleThumbnailError}
             />
@@ -226,7 +265,7 @@ export function VideoCard({ video, priority = false }: Props) {
               state={previewState}
               onCanPlay={() => setPreviewState("playing")}
               onError={() => setPreviewState("error")}
-              onTimeUpdate={(p) => setProgress(p)}
+              onTimeUpdate={handlePreviewProgress}
             />
           )}
 
@@ -294,6 +333,33 @@ function withRetryParam(src: string, retry: number): string {
   const sep = src.includes("?") ? "&" : "?";
   return `${src}${sep}r=${retry}`;
 }
+
+/**
+ * 用 memo 包装，避免父组件（如 VideoGrid / PromoStrip / 推荐 rail）
+ * 在 fetch 后整个列表 setState 时把每张卡片都重渲染。
+ * 自定义比较函数只比 video.id 和 priority，因为其他字段要么不影响渲染要么就是派生计算。
+ */
+export const VideoCard = memo(VideoCardInner, (prev, next) => {
+  if (prev.priority !== next.priority) return false;
+  const a = prev.video;
+  const b = next.video;
+  return (
+    a.id === b.id &&
+    a.title === b.title &&
+    a.thumbnail === b.thumbnail &&
+    a.previewSrc === b.previewSrc &&
+    a.duration === b.duration &&
+    a.author === b.author &&
+    a.views === b.views &&
+    a.publishedAt === b.publishedAt &&
+    a.sourceLabel === b.sourceLabel &&
+    a.quality === b.quality &&
+    a.href === b.href &&
+    a.mediaType === b.mediaType &&
+    a.progressSeconds === b.progressSeconds &&
+    a.durationSeconds === b.durationSeconds
+  );
+});
 
 // 从后端返回的 sourceLabel 推断网盘类型（用于颜色标识）。
 // 后端目前会下发中文名（"夸克网盘" / "115 网盘" / "PikPak" / "联通网盘" / "OneDrive"）

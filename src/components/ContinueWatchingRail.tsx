@@ -38,7 +38,7 @@ function ContinueWatchingItem({ video }: { video: VideoItem }) {
       <Link to={video.href} className="cw-rail__link">
         <div className="cw-rail__thumb">
           {video.thumbnail ? (
-            <img src={video.thumbnail} alt={video.title} loading="lazy" />
+            <img src={video.thumbnail} alt={video.title} width={180} height={101} loading="lazy" />
           ) : (
             <div className="cw-rail__thumb-placeholder" aria-hidden="true" />
           )}

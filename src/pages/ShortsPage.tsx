@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ChevronLeft,
@@ -506,13 +506,20 @@ export default function ShortsPage() {
     };
   }, []);
 
-  const setVideoRef = useCallback(
-    (index: number) => (el: HTMLVideoElement | null) => {
-      if (el) videoRefs.current.set(index, el);
-      else videoRefs.current.delete(index);
-    },
-    []
-  );
+  // 为每个 index 缓存一个稳定的 ref 回调函数，避免每次 render 都生成新闭包，
+  // 导致子组件 ShortsSlide 即使被 memo 包了也会因 props 变化重渲染。
+  const setVideoRefMapRef = useRef<Map<number, (el: HTMLVideoElement | null) => void>>(new Map());
+  const setVideoRef = useCallback((index: number) => {
+    let cached = setVideoRefMapRef.current.get(index);
+    if (!cached) {
+      cached = (el: HTMLVideoElement | null) => {
+        if (el) videoRefs.current.set(index, el);
+        else videoRefs.current.delete(index);
+      };
+      setVideoRefMapRef.current.set(index, cached);
+    }
+    return cached;
+  }, []);
 
   useEffect(() => {
     document.title = "短视频 · 61";
@@ -865,7 +872,7 @@ type SlideProps = {
  * - 单击切换播放 / 暂停
  * - 长按弹出的下载/分享菜单通过 contextmenu + CSS 屏蔽
  */
-function ShortsSlide({
+function ShortsSlideInner({
   item,
   index,
   isActive,
@@ -1597,6 +1604,32 @@ function ShortsLoadingSpinner({ size }: { size: number }) {
     />
   );
 }
+
+/**
+ * 用 memo 包一层：滚动 / 切换当前屏时只让目标 slide 重渲染，
+ * 其他 5 屏避免无意义的全量重渲染。
+ *
+ * areEqual 关键点：
+ * 1. item 引用必须先比；item 来自后端 immutable，引用相同时视作相等。
+ * 2. isActive / shouldMount / shouldLoad / shouldEagerLoad 决定 video 壳的 src
+ *    和事件绑定，必须严格比。
+ * 3. muted / volume 同步到 <video>，变了就要 re-render 当前屏。
+ * 4. index 只用于本地 effect / ref 查找；列表顺序不变则相等。
+ * 5. 回调（onLikeToggle / hasLiked / ...）都是父组件 useCallback 出来的，
+ *    引用稳定；videoRef 通过 setVideoRefMapRef 缓存，也是稳定引用。
+ *    其他回调（setMuted / setVolume）来自 useState 的 setter，React 保证稳定。
+ */
+const ShortsSlide = memo(ShortsSlideInner, (prev, next) => {
+  if (prev.index !== next.index) return false;
+  if (prev.isActive !== next.isActive) return false;
+  if (prev.shouldMount !== next.shouldMount) return false;
+  if (prev.shouldLoad !== next.shouldLoad) return false;
+  if (prev.shouldEagerLoad !== next.shouldEagerLoad) return false;
+  if (prev.muted !== next.muted) return false;
+  if (prev.volume !== next.volume) return false;
+  if (prev.item !== next.item) return false;
+  return true;
+});
 
 function applyVideoAudioState(
   video: HTMLVideoElement,
