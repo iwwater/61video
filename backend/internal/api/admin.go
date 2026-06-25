@@ -304,6 +304,8 @@ func (a *AdminServer) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body setupReq
+	// setup: 只有一个 username + password，16KB 远足够。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -344,6 +346,8 @@ func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body loginReq
+	// login: username + password，16KB 够用。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -644,6 +648,8 @@ type upsertDriveReq struct {
 
 func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) {
 	var body upsertDriveReq
+	// 1MB：覆盖 credential JSON + skipDirIDs 数组。
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -869,6 +875,8 @@ func crawlerNameForDrive(d *catalog.Drive) string {
 
 func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request) {
 	var body upsertCrawlerReq
+	// 1MB：crawler config + credentials + script 引用。
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -1035,6 +1043,8 @@ type testCrawlerScriptReq struct {
 // （并探测直链可达）即返回，让用户在保存前确认脚本能爬到视频。
 func (a *AdminServer) handleTestCrawlerScript(w http.ResponseWriter, r *http.Request) {
 	var body testCrawlerScriptReq
+	// 16KB：script path 字符串，1KB 都嫌多。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -1093,6 +1103,8 @@ func (a *AdminServer) handleImportCrawlerScriptFile(w http.ResponseWriter, r *ht
 
 func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *http.Request) {
 	var body importCrawlerScriptURLReq
+	// 16KB：仅一个 URL 字符串。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -1703,6 +1715,8 @@ func normalizeCrawlerProxyURL(raw, label string) (string, error) {
 func (a *AdminServer) handleDeleteDrive(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body deleteDriveReq
+	// 16KB：仅一个 bool flag。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -1967,6 +1981,8 @@ func (a *AdminServer) handleSetDriveTeaserEnabled(w http.ResponseWriter, r *http
 		return
 	}
 	var body teaserEnabledReq
+	// 16KB：单 bool。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -2009,6 +2025,8 @@ func (a *AdminServer) handleSetDriveSkipDirs(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body skipDirsReq
+	// 64KB：dirIDs 数组（每条 ~40B 也能存 1500+ 目录 ID）。
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -2182,6 +2200,8 @@ func (a *AdminServer) handleGetSystemTags(w http.ResponseWriter, r *http.Request
 // label 必须非空且唯一；aliases 中空字符串会被忽略。
 func (a *AdminServer) handlePutSystemTags(w http.ResponseWriter, r *http.Request) {
 	var in []systemTagDTO
+	// 1MB：system tags 整体覆盖，每条 tag 几十字符 + aliases 数组。
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -2209,6 +2229,8 @@ type createTagReq struct {
 
 func (a *AdminServer) handleCreateTag(w http.ResponseWriter, r *http.Request) {
 	var body createTagReq
+	// 16KB：label + aliases。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -2260,6 +2282,8 @@ type updateVideoReq struct {
 func (a *AdminServer) handleUpdateVideo(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body updateVideoReq
+	// 1MB：含 description / thumbnail URL / tags 数组。
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -2324,6 +2348,8 @@ func (a *AdminServer) handleDeleteVideo(w http.ResponseWriter, r *http.Request) 
 	var body deleteVideoReq
 	if r.Body != nil {
 		defer r.Body.Close()
+		// 16KB：单 bool flag。
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, http.StatusBadRequest, err)
@@ -2433,6 +2459,8 @@ func (a *AdminServer) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 	// 用 map 区分"没传"和"传了空字符串"两种语义；空 spider91 上传 ID 表示
 	// 本地保存不上传。
 	var raw map[string]json.RawMessage
+	// 16KB：settings 只有几个标量字段。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -2726,6 +2754,8 @@ func (a *AdminServer) handleDeleteImageSet(w http.ResponseWriter, r *http.Reques
 	var body deleteVideoReq
 	if r.Body != nil {
 		defer r.Body.Close()
+		// 16KB：单 bool flag。
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, http.StatusBadRequest, err)
@@ -2793,6 +2823,8 @@ func (a *AdminServer) handleDeleteNovel(w http.ResponseWriter, r *http.Request) 
 	var body deleteVideoReq
 	if r.Body != nil {
 		defer r.Body.Close()
+		// 16KB：单 bool flag。
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, http.StatusBadRequest, err)
