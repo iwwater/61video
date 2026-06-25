@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------
+  # Backend: static checks (go vet + gofmt)
+  # ---------------------------------------------------------------
+  backend-lint:
+    name: Backend lint (go vet + gofmt)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt check
+        run: |
+          output=$(gofmt -l .)
+          if [ -n "$output" ]; then
+            echo "The following files are not gofmt-clean:"
+            echo "$output"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------
+  # Backend: unit tests on Linux
+  #
+  # We deliberately exclude the following packages because they need
+  # extra runtime dependencies not available in a clean CI image:
+  #   - internal/preview            (requires ffmpeg)
+  #   - internal/drives             (requires ffmpeg for some flows)
+  #   - internal/drives/scriptcrawler (requires python3)
+  #   - internal/drives/spider91    (requires python3 / 91porn helpers)
+  #
+  # This is a pre-existing environment gap, not a CI scope decision.
+  # ---------------------------------------------------------------
+  backend-test-linux:
+    name: Backend tests (Linux)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Run unit tests
+        run: |
+          go test ./internal/animeparser/... \
+                 ./internal/api/... \
+                 ./internal/catalog/... \
+                 ./internal/config/... \
+                 ./internal/systemtags/... \
+                 ./internal/mediatype/... \
+                 ./internal/parsehealth/... \
+                 ./internal/resourcesearch/... \
+                 ./internal/safefetch/...
+
+  # ---------------------------------------------------------------
+  # Backend: build all packages on Windows
+  #
+  # This validates the _windows.go build tags
+  # (storage_usage_windows.go, dryrun_windows.go, etc.).
+  # ---------------------------------------------------------------
+  backend-build-windows:
+    name: Backend build (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: go build
+        run: go build ./...
+
+  # ---------------------------------------------------------------
+  # Frontend: production build
+  # ---------------------------------------------------------------
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  # ---------------------------------------------------------------
+  # Frontend: TypeScript type-check (the project's `lint` script)
+  # ---------------------------------------------------------------
+  frontend-lint:
+    name: Frontend lint (tsc --noEmit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
