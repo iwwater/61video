@@ -522,6 +522,8 @@ export type AdminVideo = {
   fileId: string;
   title: string;
   author: string;
+  /** "video" / "audio";后端如未下发,前端按 video 处理 */
+  mediaType?: "video" | "audio";
   tags: string[];
   durationSeconds: number;
   size: number;
@@ -548,13 +550,23 @@ export type AdminVideoList = {
 };
 
 export function listVideos(
-  params: { driveId?: string; page?: number; size?: number; keyword?: string } = {}
+  params: {
+    driveId?: string;
+    page?: number;
+    size?: number;
+    keyword?: string;
+    /** "video" / "audio" / 其它值(含空) = 不过滤 */
+    mediaType?: string;
+  } = {}
 ) {
   const qs = new URLSearchParams();
   if (params.driveId) qs.set("driveId", params.driveId);
   if (params.page) qs.set("page", String(params.page));
   if (params.size) qs.set("size", String(params.size));
   if (params.keyword) qs.set("keyword", params.keyword);
+  if (params.mediaType === "video" || params.mediaType === "audio") {
+    qs.set("media_type", params.mediaType);
+  }
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<AdminVideoList>(`/videos${suffix}`);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ChevronDown,
@@ -116,6 +116,7 @@ function CurrentVideosTab({ onStatsChanged }: { onStatsChanged: () => void }) {
   const [keyword, setKeyword] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [driveId, setDriveId] = useState("");
+  const [mediaType, setMediaType] = useState<"" | "video" | "audio">("");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [editing, setEditing] = useState<api.AdminVideo | null>(null);
@@ -138,7 +139,13 @@ function CurrentVideosTab({ onStatsChanged }: { onStatsChanged: () => void }) {
     setLoadError("");
     try {
       const [r, tagList, driveList] = await Promise.all([
-        api.listVideos({ driveId, page, size: pageSize, keyword: searchKeyword }),
+        api.listVideos({
+          driveId,
+          page,
+          size: pageSize,
+          keyword: searchKeyword,
+          mediaType: mediaType || undefined,
+        }),
         api.listTags(),
         api.listDrives(),
       ]);
@@ -171,7 +178,7 @@ function CurrentVideosTab({ onStatsChanged }: { onStatsChanged: () => void }) {
 
   useEffect(() => {
     refresh();
-  }, [driveId, page, searchKeyword, pageSize]);
+  }, [driveId, page, searchKeyword, pageSize, mediaType]);
 
   useEffect(() => {
     setPage(1);
@@ -185,6 +192,10 @@ function CurrentVideosTab({ onStatsChanged }: { onStatsChanged: () => void }) {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [keyword]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [mediaType]);
 
   useEffect(() => {
     if (trackedRegenCount === 0 && !hasGeneratingPreview) return;
@@ -216,6 +227,15 @@ function CurrentVideosTab({ onStatsChanged }: { onStatsChanged: () => void }) {
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
 
   const listItems = list;
+  const selectedHasVideo = useMemo(() => {
+    if (selectedIds.size === 0) return false;
+    const byId = new Map(list.map((v) => [v.id, v]));
+    for (const id of selectedIds) {
+      const v = byId.get(id);
+      if (v && (v.mediaType ?? "video") === "video") return true;
+    }
+    return false;
+  }, [selectedIds, list]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const pageEnd = Math.min(total, page * pageSize);
@@ -382,6 +402,10 @@ function CurrentVideosTab({ onStatsChanged }: { onStatsChanged: () => void }) {
     <>
       <div className="admin-page__actions admin-videos-filter">
         <DriveFilter drives={drives} driveId={driveId} onChange={(id) => { setDriveId(id); setPage(1); }} withCounts />
+        <MediaTypeFilter
+          mediaType={mediaType}
+          onChange={(v) => { setMediaType(v); setPage(1); }}
+        />
         <SearchBox keyword={keyword} onChange={setKeyword} onSubmit={handleSearchSubmit} />
         <button type="button" className="admin-btn" onClick={refresh}>
           <RefreshCw size={13} /> 刷新
@@ -394,9 +418,12 @@ function CurrentVideosTab({ onStatsChanged }: { onStatsChanged: () => void }) {
           {selectedIds.size > 0 && (
             <div className="admin-videos-bulk-actions">
               <span className="admin-videos-bulk-actions__count">已选择 {selectedIds.size} 项</span>
-              <button type="button" className="admin-btn is-primary admin-videos-bulk-actions__btn" onClick={handleBatchRegen}>
-                <RefreshCw size={13} /> 批量重生预览视频
-              </button>
+              {/* 预览重生仅对视频有效：所选项里有视频才显示 */}
+              {selectedHasVideo && (
+                <button type="button" className="admin-btn is-primary admin-videos-bulk-actions__btn" onClick={handleBatchRegen}>
+                  <RefreshCw size={13} /> 批量重生预览视频
+                </button>
+              )}
               <button type="button" className="admin-btn is-danger admin-videos-bulk-actions__btn" onClick={handleBatchDelete}>
                 <Trash2 size={13} /> 批量删除
               </button>
@@ -773,6 +800,30 @@ function DriveFilter({
             {withCounts ? `（已生成 ${d.teaserReadyCount ?? 0}，待生成 ${d.teaserPendingCount ?? 0}）` : ""}
           </option>
         ))}
+      </select>
+      <ChevronDown size={15} className="admin-videos-filter__select-icon" aria-hidden="true" />
+    </div>
+  );
+}
+
+function MediaTypeFilter({
+  mediaType,
+  onChange,
+}: {
+  mediaType: "" | "video" | "audio";
+  onChange: (v: "" | "video" | "audio") => void;
+}) {
+  return (
+    <div className="admin-videos-filter__select-wrap">
+      <select
+        className="admin-videos-filter__select"
+        value={mediaType}
+        onChange={(e) => onChange(e.target.value as "" | "video" | "audio")}
+        aria-label="媒体类型筛选"
+      >
+        <option value="">全部媒体</option>
+        <option value="video">仅视频</option>
+        <option value="audio">仅音频</option>
       </select>
       <ChevronDown size={15} className="admin-videos-filter__select-icon" aria-hidden="true" />
     </div>
