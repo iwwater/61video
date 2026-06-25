@@ -95,6 +95,61 @@
   pointer-events: none;
 }
 
+/* ----- Theme toggle（4 主题切换） ----- */
+.theme-toggle {
+  position: absolute;
+  top: 50%;
+  right: var(--container-pad-x, 24px);
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+}
+
+.theme-toggle__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.theme-toggle__btn:hover {
+  color: var(--text-strong);
+  background: var(--bg-elevated);
+}
+
+.theme-toggle__btn.is-active {
+  color: var(--text-on-accent, #1a0f04);
+  background: var(--accent-gradient);
+  box-shadow: var(--shadow-inset);
+}
+
+.theme-toggle__label {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .theme-toggle__label {
+    display: inline;
+  }
+}
+
+@media (max-width: 640px) {
+  .theme-toggle {
+    right: 14px;
+  }
+}
+
 .main-nav {
   position: sticky;
   top: 0;

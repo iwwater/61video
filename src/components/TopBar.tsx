@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, KeyboardEvent, FormEvent } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Search } from "lucide-react";
+import { ThemeToggle } from "./ThemeToggle";
 
 /**
  * 顶部 TopBar。
@@ -9,6 +10,7 @@ import { Search } from "lucide-react";
  * - 占位："搜索 视频 / 音频 / 图集 / 小说..."
  * - 回车：跳 /search?q=<query>
  * - "/"：从全局聚焦（受 keyboard-shortcuts 的 useShortcuts 调度，自身只暴露 focus 方法）
+ * - 右侧 ThemeToggle 4 主题切换
  *
  * 暴露：
  *   window.__topBarFocusSearch  : 全局可调的聚焦函数
@@ -94,6 +96,7 @@ export function TopBar() {
             /
           </kbd>
         </form>
+        <ThemeToggle />
       </div>
     </div>
   );

@@ -654,3 +654,68 @@
 :root .admin-loading-screen {
   background: transparent;
 }
+
+/* =========================================================
+ * P1 主题 4 套（客户端本地切换，不下发到服务端）
+ *
+ * - .theme-p1-light    等同 pink（cream/白）
+ * - .theme-p1-dark     等同 dark
+ * - .theme-p1-eyecare  等同 sky（蓝底护眼）
+ * - .theme-p1-green    新增绿色系：cream 底 + 草绿主色
+ *
+ * 实现方式：在 server theme（pink）基础上覆盖 token，
+ * data-theme 仍写 server 主题（避免破坏后端契约）。
+ * 前缀优先级：.theme-p1-* 写在 :root 之后覆盖。
+ * ========================================================= */
+:root.theme-p1-green {
+  --bg-page: #eef7ec;
+  --bg-surface: #ffffff;
+  --bg-elevated: #e2f1dc;
+  --bg-sunken: #d8ecd0;
+  --bg-overlay: rgba(230, 245, 226, 0.82);
+
+  --glass-nav: rgba(245, 252, 240, 0.78);
+  --glass-card: rgba(255, 255, 255, 0.72);
+
+  --border-subtle: rgba(40, 130, 60, 0.1);
+  --border-default: rgba(40, 130, 60, 0.18);
+  --border-strong: rgba(30, 90, 45, 0.24);
+  --border-accent: rgba(63, 175, 90, 0.55);
+
+  --text-strong: #1b2e1d;
+  --text-default: #2f4a32;
+  --text-muted: #6f8a72;
+  --text-faint: #a8bbaa;
+  --text-disabled: #c9d4ca;
+  --text-on-accent: #ffffff;
+
+  --accent: #3caf5a;
+  --accent-hover: #5cc279;
+  --accent-strong: #2a8a45;
+  --accent-soft: rgba(63, 175, 90, 0.14);
+  --accent-softer: rgba(63, 175, 90, 0.08);
+  --accent-glow: rgba(63, 175, 90, 0.28);
+  --accent-gradient: linear-gradient(135deg, #7fd098 0%, #3caf5a 100%);
+  --accent-gradient-strong: linear-gradient(135deg, #a3dab2 0%, #3caf5a 55%, #2a8a45 100%);
+
+  --shadow-sm: 0 1px 2px rgba(30, 90, 45, 0.08);
+  --shadow-md:
+    0 2px 4px rgba(30, 90, 45, 0.08),
+    0 8px 20px rgba(30, 90, 45, 0.1);
+  --shadow-lg:
+    0 4px 10px rgba(30, 90, 45, 0.1),
+    0 18px 40px rgba(30, 90, 45, 0.14);
+  --shadow-xl:
+    0 8px 16px rgba(30, 90, 45, 0.1),
+    0 28px 60px rgba(30, 90, 45, 0.18);
+  --shadow-glow: 0 0 0 1px var(--border-accent), 0 8px 28px var(--accent-glow);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+:root.theme-p1-green body::before {
+  background:
+    linear-gradient(to right, rgba(63, 175, 90, 0.13) 1px, transparent 1px) 0 0 / 82px 82px,
+    linear-gradient(to bottom, rgba(63, 175, 90, 0.13) 1px, transparent 1px) 0 0 / 82px 82px,
+    radial-gradient(1200px 600px at 85% -10%, rgba(63, 175, 90, 0.12), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(140, 200, 110, 0.07), transparent 60%);
+}
