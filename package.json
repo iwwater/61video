@@ -13,13 +13,13 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
-    "@wojtekmaj/react-pdf": "^9.2.1",
     "artplayer": "^5.4.0",
     "hls.js": "^1.6.16",
     "lucide-react": "0.453.0",
     "pdfjs-dist": "^4.0.379",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "react-pdf": "^9.2.1",
     "react-router-dom": "^6.30.3"
   },
   "devDependencies": {
