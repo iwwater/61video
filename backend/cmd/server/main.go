@@ -311,6 +311,9 @@ func main() {
 	}
 
 	r := chi.NewRouter()
+	// gzip 压缩：仅压缩文本类 MIME（白名单），视频字节流（mp4/m3u8 等）自动跳过。
+	// 不影响 /p/stream/* 反代路径——其响应 MIME 不在白名单。
+	r.Use(middleware.Compress(5, "application/json", "text/html", "text/css", "application/javascript"))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.Server.AllowedOrigins))
