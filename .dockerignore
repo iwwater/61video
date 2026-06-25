@@ -3,19 +3,69 @@
 .gitattributes
 .gitignore
 
+# 本地开发产物：不影响 build
 node_modules
 dist
+.vite
 release
 data
 backend/data
 backend/config.yaml
 config.yaml
 
+# 体积占比大头：根目录的 GIF/WebP、tests、docs
+tests
+docs
+crawler-scripts/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Playwright / 调试中间产物
+.playwright-mcp/
+tmp/
+
+# 视频/爬虫数据：不应进入 image
+*.mp4
+*.mov
+*.webm
+*.avi
+*.mkv
+*.flv
+*.wmv
+*.m4v
 *.db
 *.sqlite
 *.sqlite3
 *.log
 *.tmp
 
-tests
+# 第三方源码参考（vendor 单独处理：见 backend/.gitignore 注释）
+vendor-refs/
+OpenList-4.2.1/
+
+# 工具链
+tools/
+
+# 爬虫默认输出（backend 跑时显式 --output 到 backend/data/spider61/）
+91porn_videos.json
+__pycache__/
+*.pyc
+
+# 顶层 markdown 笔记/图片
 video-site-implementation-plan.md
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.bmp
+/*.ico
+/image.jpg
+/image003.jpg
+/image004.jpg
+/image005.png
+/image006.png
+/image02.png
