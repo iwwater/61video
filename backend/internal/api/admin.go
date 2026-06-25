@@ -2095,10 +2095,11 @@ func (a *AdminServer) handleAdminListVideos(w http.ResponseWriter, r *http.Reque
 		size = 100
 	}
 	items, total, err := a.Catalog.ListVideos(r.Context(), catalog.ListParams{
-		Keyword:  q.Get("keyword"),
-		DriveID:  q.Get("driveId"),
-		Page:     page,
-		PageSize: size,
+		Keyword:   q.Get("keyword"),
+		DriveID:   q.Get("driveId"),
+		MediaType: q.Get("media_type"),
+		Page:      page,
+		PageSize:  size,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
