@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
+import { PdfViewer } from "@/components/PdfViewer";
 import { fetchNovelDetail } from "@/data/novels";
 import type { NovelChapter, NovelDetail } from "@/types";
 import {
@@ -239,10 +240,9 @@ export default function NovelDetailPage() {
                 {chapter.title || `第 ${activeIdx + 1} 章`}
               </h1>
               {chapter.contentType === "pdf" ? (
-                <iframe
-                  className="reader-pdf"
-                  src={chapter.pdfUrl}
-                  title={chapter.title}
+                <PdfViewer
+                  file={chapter.pdfUrl || ""}
+                  title={chapter.title || `第 ${activeIdx + 1} 章`}
                 />
               ) : (
                 <div

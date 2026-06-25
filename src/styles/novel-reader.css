@@ -485,3 +485,155 @@
 .novel-card--skeleton {
   pointer-events: none;
 }
+
+/* ============================================================================
+ * PDF 阅读器（react-pdf 替换 iframe 后的样式）
+ * ========================================================================== */
+
+.pdf-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: var(--reader-surface, #1a1f29);
+  border: 1px solid var(--reader-border, #2a3038);
+  border-radius: 8px;
+  padding: 1rem;
+  min-height: 70vh;
+}
+
+.pdf-viewer__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.75rem;
+  background: var(--reader-surface-elevated, #141821);
+  border: 1px solid var(--reader-border, #2a3038);
+  border-radius: 6px;
+}
+
+.pdf-viewer__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--reader-border, #2a3038);
+  background: var(--reader-surface, #1a1f29);
+  color: var(--reader-text, #e6e8eb);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pdf-viewer__btn:hover:not(:disabled) {
+  background: var(--reader-surface-hover, #232936);
+  border-color: var(--reader-border-hover, #3a4150);
+}
+
+.pdf-viewer__btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pdf-viewer__page-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--reader-text-muted, #a8adb8);
+}
+
+.pdf-viewer__page-input {
+  width: 3rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+  text-align: right;
+  border: 1px solid var(--reader-border, #2a3038);
+  background: var(--reader-surface, #1a1f29);
+  color: var(--reader-text, #e6e8eb);
+  border-radius: 4px;
+}
+
+.pdf-viewer__page-sep {
+  margin: 0 0.1rem;
+  opacity: 0.5;
+}
+
+.pdf-viewer__page-total {
+  min-width: 1.5rem;
+  text-align: left;
+}
+
+.pdf-viewer__scale {
+  min-width: 3rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--reader-text-muted, #a8adb8);
+  font-variant-numeric: tabular-nums;
+}
+
+.pdf-viewer__sep {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--reader-border, #2a3038);
+  margin: 0 0.25rem;
+}
+
+.pdf-viewer__document {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  overflow: auto;
+  padding: 1rem;
+  background: var(--reader-bg, #0e1117);
+  border-radius: 4px;
+  min-height: 60vh;
+}
+
+.pdf-viewer__document .react-pdf__Document {
+  display: flex;
+  justify-content: center;
+}
+
+.pdf-viewer__document .react-pdf__Page {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
+}
+
+.pdf-viewer__document .react-pdf__Page__canvas {
+  display: block;
+  max-width: 100%;
+  height: auto !important;
+}
+
+.pdf-viewer__loading,
+.pdf-viewer__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1rem;
+  color: var(--reader-text-muted, #a8adb8);
+  font-size: 0.95rem;
+}
+
+.pdf-viewer__error {
+  color: var(--color-danger, #e5484d);
+}
+
+.pdf-viewer__error-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+.pdf-viewer__loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(14, 17, 23, 0.5);
+  pointer-events: none;
+}
