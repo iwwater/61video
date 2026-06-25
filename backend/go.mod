@@ -5,13 +5,13 @@ go 1.23.0
 toolchain go1.23.4
 
 require (
-	github.com/OpenListTeam/wopan-sdk-go v0.2.0
+	github.com/OpenListTeam/wopan-sdk-go v0.2.2
 	github.com/SheltonZhu/115driver v1.3.2
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/go-resty/resty/v2 v2.14.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	golang.org/x/net v0.27.0
+	golang.org/x/net v0.33.0
 	golang.org/x/sys v0.30.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.33.1
@@ -29,7 +29,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.17 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	golang.org/x/crypto v0.25.0 // indirect
+	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/time v0.8.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.55.3 // indirect
@@ -37,6 +37,7 @@ require (
 	modernc.org/memory v1.8.0 // indirect
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
+	resty.dev/v3 v3.0.0-beta.3 // indirect
 )
 
 // 依赖已通过 go mod vendor 打包进 backend/vendor/ 并入库，支持离线构建。
