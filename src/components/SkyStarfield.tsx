@@ -3,11 +3,12 @@ import type { CSSProperties } from "react";
 /**
  * 星空蓝主题专属：视口级星星贴纸层。
  *
- * 用 vip.215.im 那套动画 GIF 贴纸：每个 GIF 自带逐帧闪烁动画，
+ * 用 vip.215.im 那套动画贴纸：每个动画自带逐帧闪烁动画，
  * 比 CSS opacity 呼吸真实得多。桌面和手机分开维护点位，避免首屏密度
  * 被页面高度拉伸，也避免手机端星星过大。
  *
- * - 资源在 public/stickers/star-*.gif，会被打包到 dist/stickers/
+ * - 资源在 public/stickers/star-*.webp（动画 WebP），会打包到 dist/stickers/
+ * - 老 GIF 已迁移到 public/stickers/.deprecated/，需要回滚时移回 + 改 src
  * - 渲染在 App 根节点，主站和后台都看得到
  * - data-theme!=="sky" 时 CSS display: none，不占布局
  * - aria-hidden + pointer-events: none，对可访问性和点击都透明
@@ -15,10 +16,10 @@ import type { CSSProperties } from "react";
  */
 
 const STICKERS = [
-  "/stickers/star-gold.gif",
-  "/stickers/star-pink.gif",
-  "/stickers/star-sparkle.gif",
-  "/stickers/star-mini.gif",
+  "/stickers/star-gold.webp",
+  "/stickers/star-pink.webp",
+  "/stickers/star-sparkle.webp",
+  "/stickers/star-mini.webp",
 ];
 
 type StarSpec = {
@@ -68,49 +69,37 @@ const MOBILE_STARS: StarSpec[] = [
   { bottom: "5%", left: "48%", size: 20 },
 ];
 
+function renderStar(key: string, s: StarSpec, src: string, className: string) {
+  const style: CSSProperties = {
+    top: s.top,
+    bottom: s.bottom,
+    left: s.left,
+    right: s.right,
+    width: s.size,
+    height: s.size,
+  };
+  return <img key={key} className={className} src={src} alt="" style={style} />;
+}
+
 export function SkyStarfield() {
   return (
     <div className="sky-starfield" aria-hidden="true">
-      {DESKTOP_STARS.map((s, i) => {
-        const style: CSSProperties = {
-          top: s.top,
-          bottom: s.bottom,
-          left: s.left,
-          right: s.right,
-          width: s.size,
-          height: s.size,
-        };
-        const src = STICKERS[i % STICKERS.length];
-        return (
-          <img
-            key={`desktop-${i}`}
-            className="sky-star sky-star--desktop"
-            src={src}
-            alt=""
-            style={style}
-          />
-        );
-      })}
-      {MOBILE_STARS.map((s, i) => {
-        const style: CSSProperties = {
-          top: s.top,
-          bottom: s.bottom,
-          left: s.left,
-          right: s.right,
-          width: s.size,
-          height: s.size,
-        };
-        const src = STICKERS[(i + 1) % STICKERS.length];
-        return (
-          <img
-            key={`mobile-${i}`}
-            className="sky-star sky-star--mobile"
-            src={src}
-            alt=""
-            style={style}
-          />
-        );
-      })}
+      {DESKTOP_STARS.map((s, i) =>
+        renderStar(
+          `desktop-${i}`,
+          s,
+          STICKERS[i % STICKERS.length],
+          "sky-star sky-star--desktop",
+        ),
+      )}
+      {MOBILE_STARS.map((s, i) =>
+        renderStar(
+          `mobile-${i}`,
+          s,
+          STICKERS[(i + 1) % STICKERS.length],
+          "sky-star sky-star--mobile",
+        ),
+      )}
     </div>
   );
 }
