@@ -1,5 +1,5 @@
-# github.com/OpenListTeam/wopan-sdk-go v0.2.0
-## explicit; go 1.20
+# github.com/OpenListTeam/wopan-sdk-go v0.2.2
+## explicit; go 1.21
 github.com/OpenListTeam/wopan-sdk-go
 # github.com/SheltonZhu/115driver v1.3.2
 ## explicit; go 1.23.0
@@ -62,10 +62,10 @@ github.com/remyoudompheng/bigfft
 github.com/skip2/go-qrcode
 github.com/skip2/go-qrcode/bitset
 github.com/skip2/go-qrcode/reedsolomon
-# golang.org/x/crypto v0.25.0
+# golang.org/x/crypto v0.31.0
 ## explicit; go 1.20
 golang.org/x/crypto/curve25519
-# golang.org/x/net v0.27.0
+# golang.org/x/net v0.33.0
 ## explicit; go 1.18
 golang.org/x/net/internal/socks
 golang.org/x/net/proxy
@@ -126,3 +126,6 @@ modernc.org/strutil
 # modernc.org/token v1.1.0
 ## explicit
 modernc.org/token
+# resty.dev/v3 v3.0.0-beta.3
+## explicit; go 1.21
+resty.dev/v3
