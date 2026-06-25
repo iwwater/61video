@@ -344,7 +344,13 @@ func main() {
 	// 解析源健康检查：每 5 分钟 ping 一次，写回 DB
 	app.healthChecker = parsehealth.New(cat)
 	healthCancel := app.healthChecker.Start(ctx)
-	defer func() { _ = healthCancel; app.healthChecker.StopAll() }()
+	defer func() {
+		// healthCancel 是 Start 返回的 CancelFunc，必须调用而不是 _= 丢弃。
+		// 之前写 _ = healthCancel 是个错：CancelFunc 本就是要触发的，
+		// 写 _ = 只是把函数值赋给 _ 然后立刻丢掉，ctx 永远没 cancel。
+		healthCancel()
+		app.healthChecker.StopAll()
+	}()
 
 	srv := &http.Server{
 		Addr:    cfg.Server.Listen,
