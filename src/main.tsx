@@ -6,6 +6,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./admin/ToastContext";
 import { AuthProvider } from "./admin/AuthContext";
 import { syncThemeFromServer } from "./lib/theme";
+import { ShortcutsProvider } from "./lib/keyboard-shortcuts";
 
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -29,6 +30,7 @@ syncThemeFromServer();
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
+      <ShortcutsProvider />
       <ToastProvider>
         <AuthProvider>
           <ErrorBoundary>
