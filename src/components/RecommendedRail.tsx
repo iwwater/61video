@@ -205,7 +205,7 @@ function RecommendedItem({ video }: { video: VideoItem }) {
       >
         <div className="vd-rail__thumb">
           {video.thumbnail ? (
-            <img src={video.thumbnail} alt={video.title} loading="lazy" />
+            <img src={video.thumbnail} alt={video.title} width={148} height={83} loading="lazy" />
           ) : (
             <div className="thumb-placeholder thumb-placeholder--audio thumb-placeholder--rail" aria-hidden="true">
               <Music4 size={28} />

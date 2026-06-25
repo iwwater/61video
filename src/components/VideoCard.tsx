@@ -247,6 +247,8 @@ function VideoCardInner({ video, priority = false }: Props) {
               className="thumb-image"
               src={thumbnailSrc}
               alt={video.title}
+              width={320}
+              height={180}
               loading={priority ? "eager" : "lazy"}
               onError={handleThumbnailError}
             />
