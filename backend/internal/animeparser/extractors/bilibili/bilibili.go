@@ -13,7 +13,7 @@
 //
 // 注意：B 站 dash 直链通常需要 Referer=https://www.bilibili.com 才能播放，
 // 我们把 Referer 放进 ParseResult.Headers 让前端播放时带上。
-// 已登录用户如果在配置里加了 SESSDATA cookie（暂未提供入口），可以拿到更高清晰度。
+// 已登录用户如果在配置里加了 SESSDATA cookie，可以拿到 1080P / 大会员画质。
 package bilibili
 
 import (
@@ -37,7 +37,14 @@ func init() {
 }
 
 // Parser B 站 extractor。
-type Parser struct{}
+//
+// SESSData 是可选的登录态 cookie。空字符串表示未登录，调用 /x/player/playurl
+// 时只能拿到 480P；非空时会自动在所有 B 站 API 请求上注入
+// `Cookie: SESSDATA=<value>`，登录用户可拿到 1080P / 大会员画质。
+type Parser struct {
+	// SESSData 用户的 SESSDATA cookie 值（不含 "SESSDATA=" 前缀）。
+	SESSData string
+}
 
 // Name 实现 animeparser.Parser。
 func (p *Parser) Name() string { return "bilibili" }
@@ -59,6 +66,46 @@ var (
 	epRegex = regexp.MustCompile(`(?i)/bangumi/play/(ep\d+)`)
 	b23Regex = regexp.MustCompile(`(?i)b23\.tv/([0-9A-Za-z]+)`)
 )
+
+// applyCookie 在 Parser 配置了 SESSDATA 时给请求注入登录态 cookie。
+// 空值时什么也不做。
+func (p *Parser) applyCookie(req *http.Request) {
+	if p == nil || req == nil {
+		return
+	}
+	cookie := strings.TrimSpace(p.SESSData)
+	if cookie == "" {
+		return
+	}
+	req.Header.Set("Cookie", "SESSDATA="+cookie)
+}
+
+// httpClient 返回当前 parser 使用的 HTTP 客户端。生产代码走 safefetch.Client；
+// 测试可通过 setHTTPClient 注入 httptest server。
+var httpClient = safefetch.Client
+
+// setHTTPClient 注入自定义 client（仅测试用）。
+func setHTTPClient(c *http.Client) {
+	if c == nil {
+		httpClient = safefetch.Client
+		return
+	}
+	httpClient = c
+}
+
+// B 站 API base URL。生产是 https://api.bilibili.com；测试可通过
+// setAPIBaseURL 指向 httptest server 拦截请求。
+var apiBaseURL = "https://api.bilibili.com"
+
+// setAPIBaseURL 注入自定义 base URL（仅测试用）。
+func setAPIBaseURL(s string) {
+	s = strings.TrimRight(strings.TrimSpace(s), "/")
+	if s == "" {
+		apiBaseURL = "https://api.bilibili.com"
+		return
+	}
+	apiBaseURL = s
+}
 
 // Extract 实现 animeparser.Parser。
 func (p *Parser) Extract(ctx context.Context, rawURL string) (*animeparser.ParseResult, error) {
@@ -192,7 +239,7 @@ type viewResp struct {
 }
 
 func (p *Parser) fetchView(ctx context.Context, bvid string, aid int64) (*viewData, error) {
-	apiURL := "https://api.bilibili.com/x/web-interface/view"
+	apiURL := apiBaseURL + "/x/web-interface/view"
 	q := url.Values{}
 	if bvid != "" {
 		q.Set("bvid", bvid)
@@ -207,8 +254,9 @@ func (p *Parser) fetchView(ctx context.Context, bvid string, aid int64) (*viewDa
 	}
 	animeparser.SetDefaultHeaders(req)
 	req.Header.Set("Referer", "https://www.bilibili.com")
+	p.applyCookie(req)
 
-	resp, err := safefetch.Client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +300,7 @@ type playURLResp struct {
 func (p *Parser) fetchPlayURL(ctx context.Context, bvid string, aid int64, cid int64) (string, int, error) {
 	// 优先尝试 mp4 (qn=80=1080P, fnval=1=mp4)；拿不到再试 dash (fnval=16)
 	for _, fnval := range []string{"1", "16"} {
-		apiURL := "https://api.bilibili.com/x/player/playurl"
+		apiURL := apiBaseURL + "/x/player/playurl"
 		q := url.Values{}
 		if bvid != "" {
 			q.Set("bvid", bvid)
@@ -273,8 +321,9 @@ func (p *Parser) fetchPlayURL(ctx context.Context, bvid string, aid int64, cid i
 		}
 		animeparser.SetDefaultHeaders(req)
 		req.Header.Set("Referer", "https://www.bilibili.com")
+		p.applyCookie(req)
 
-		resp, err := safefetch.Client.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			continue
 		}

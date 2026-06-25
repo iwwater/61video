@@ -30,12 +30,13 @@ var (
 )
 
 type Config struct {
-	Server  Server  `yaml:"server"`
-	Storage Storage `yaml:"storage"`
-	Scanner Scanner `yaml:"scanner"`
-	Preview Preview `yaml:"preview"`
-	Nightly Nightly `yaml:"nightly"`
-	Drives  []Drive `yaml:"drives"`
+	Server   Server   `yaml:"server"`
+	Storage  Storage  `yaml:"storage"`
+	Scanner  Scanner  `yaml:"scanner"`
+	Preview  Preview  `yaml:"preview"`
+	Nightly  Nightly  `yaml:"nightly"`
+	Drives   []Drive  `yaml:"drives"`
+	Bilibili Bilibili `yaml:"bilibili"`
 }
 
 type Server struct {
@@ -219,6 +220,17 @@ type Drive struct {
 	Name   string            `yaml:"name"`
 	RootID string            `yaml:"root_id"`
 	Params map[string]string `yaml:"params,omitempty"`
+}
+
+// Bilibili B 站 extractor 的可选配置。
+//
+// 留空表示未登录，bilibili extractor 在调用 web-interface/view 和
+// /x/player/playurl 时只能拿到 480P。填了 SESSDATA 后会自动在所有 B 站
+// API 请求里带上 `Cookie: SESSDATA=<value>`，登录用户可拿到 1080P / 大会员画质。
+//
+// 字段语义：只填 SESSDATA 这一项的 value（不含 "SESSDATA=" 前缀）。
+type Bilibili struct {
+	SESSData string `yaml:"sessdata"`
 }
 
 // Load 读取配置；若不存在则从 config.example.yaml 复制一份并返回

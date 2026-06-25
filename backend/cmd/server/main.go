@@ -20,7 +20,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	_ "github.com/video-site/backend/internal/animeparser/extractors/bilibili"
+	"github.com/video-site/backend/internal/animeparser"
+	"github.com/video-site/backend/internal/animeparser/extractors/bilibili"
+	_ "github.com/video-site/backend/internal/animeparser/extractors/jable"
 	_ "github.com/video-site/backend/internal/animeparser/extractors/universal"
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/auth"
@@ -61,6 +63,13 @@ func main() {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+
+	// bilibili extractor 默认 init 时已经注册了一个空 SESSDATA 的实例。
+	// 这里用 yaml 里的配置覆盖一遍，让登录态 cookie 真正生效。
+	if sess := strings.TrimSpace(cfg.Bilibili.SESSData); sess != "" {
+		animeparser.Register(&bilibili.Parser{SESSData: sess})
+		log.Printf("[bilibili] SESSDATA configured (length=%d), higher quality enabled", len(sess))
 	}
 
 	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
