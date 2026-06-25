@@ -3,7 +3,151 @@
  * sticky 玻璃顶栏 + Logo 渐变 + 移动端汉堡
  * ========================================================= */
 .top-bar {
-  display: none; /* TopBar 当前返回 null */
+  position: relative;
+  z-index: calc(var(--z-nav) + 1);
+  background: var(--glass-nav);
+  border-bottom: 1px solid var(--border-subtle);
+  backdrop-filter: saturate(160%) blur(16px);
+  -webkit-backdrop-filter: saturate(160%) blur(16px);
+}
+
+.top-bar__inner {
+  display: flex;
+  align-items: center;
+  height: 48px;
+}
+
+.top-bar__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+  color: var(--text-default);
+  transition: border-color var(--transition-fast), background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.top-bar__search:focus-within {
+  border-color: var(--border-accent);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px var(--accent-softer);
+}
+
+.top-bar__search-icon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.top-bar__search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text-strong);
+  font-size: var(--font-md);
+  font-family: inherit;
+}
+
+.top-bar__search-input::placeholder {
+  color: var(--text-faint);
+}
+
+/* 取消 webkit search 控件的默认样式（清除 X 按钮） */
+.top-bar__search-input::-webkit-search-decoration,
+.top-bar__search-input::-webkit-search-cancel-button,
+.top-bar__search-input::-webkit-search-results-button,
+.top-bar__search-input::-webkit-search-results-decoration {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.top-bar__shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* 聚焦时把快捷键提示淡掉，避免抢视觉 */
+.top-bar__search:focus-within .top-bar__shortcut {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ----- Theme toggle（4 主题切换） ----- */
+.theme-toggle {
+  position: absolute;
+  top: 50%;
+  right: var(--container-pad-x, 24px);
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+}
+
+.theme-toggle__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.theme-toggle__btn:hover {
+  color: var(--text-strong);
+  background: var(--bg-elevated);
+}
+
+.theme-toggle__btn.is-active {
+  color: var(--text-on-accent, #1a0f04);
+  background: var(--accent-gradient);
+  box-shadow: var(--shadow-inset);
+}
+
+.theme-toggle__label {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .theme-toggle__label {
+    display: inline;
+  }
+}
+
+@media (max-width: 640px) {
+  .theme-toggle {
+    right: 14px;
+  }
 }
 
 .main-nav {
@@ -196,6 +340,19 @@
   .main-nav__inner {
     height: 56px;
     gap: var(--space-3);
+  }
+
+  .top-bar__inner {
+    height: 44px;
+  }
+
+  .top-bar__search {
+    height: 34px;
+    padding: 0 8px 0 10px;
+  }
+
+  .top-bar__shortcut {
+    display: none;
   }
 
   .main-nav__logo {

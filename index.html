@@ -26,8 +26,14 @@
       (function () {
         try {
           var t = localStorage.getItem("video-site:theme");
+          // 兼容 3 套后端主题 + 4 套 P1 客户端主题
           if (t === "pink" || t === "dark" || t === "sky") {
             document.documentElement.setAttribute("data-theme", t);
+          } else if (t === "light" || t === "eyecare" || t === "green") {
+            // P1 主题：仅 4 选，落到对应后端主题
+            var map = { light: "pink", eyecare: "sky", green: "pink" };
+            document.documentElement.setAttribute("data-theme", map[t]);
+            document.documentElement.classList.add("theme-p1-" + t);
           } else {
             document.documentElement.setAttribute("data-theme", "dark");
           }
