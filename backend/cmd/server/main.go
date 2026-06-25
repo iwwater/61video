@@ -3758,6 +3758,11 @@ func frontendHandler(dir string) http.HandlerFunc {
 			if err == nil {
 				defer f.Close()
 				if st, statErr := f.Stat(); statErr == nil && !st.IsDir() {
+					// Vite 产出的 hashed assets 走 /assets/*，文件 hash 在名里，
+					// 一年内不会变，可放心强缓存。
+					if strings.HasPrefix(rel, "assets/") {
+						w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+					}
 					http.ServeContent(w, r, st.Name(), st.ModTime(), f)
 					return
 				}
@@ -3768,6 +3773,9 @@ func frontendHandler(dir string) http.HandlerFunc {
 			}
 		}
 
+		// HTML 入口：no-cache 让浏览器每次校验 ETag/Last-Modified，
+		// 发布新版本能立即生效。
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	}
 }
