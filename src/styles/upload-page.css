@@ -1,0 +1,250 @@
+/* 上传中心样式 */
+
+.upload-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  margin-bottom: 24px;
+}
+.upload-tab {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+}
+.upload-tab:hover {
+  opacity: 1;
+}
+.upload-tab.is-active {
+  background: var(--card-bg, #fff);
+  opacity: 1;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.upload-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+  background: var(--card-bg, #fff);
+  border-radius: 14px;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+}
+.upload-form--novel {
+  max-width: 920px;
+}
+.upload-form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 640px) {
+  .upload-form__row {
+    grid-template-columns: 1fr;
+  }
+}
+.upload-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.upload-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  opacity: 0.85;
+}
+.upload-field--half {
+  flex: 1;
+}
+.upload-field input,
+.upload-field select,
+.upload-field textarea {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  color: inherit;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.upload-field input:focus,
+.upload-field select:focus,
+.upload-field textarea:focus {
+  border-color: color-mix(in srgb, currentColor 60%, transparent);
+}
+.upload-field textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.upload-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  border: 2px dashed color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: center;
+  color: inherit;
+  opacity: 0.7;
+  transition: background 0.15s, border-color 0.15s;
+}
+.upload-drop:hover {
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  border-color: color-mix(in srgb, currentColor 40%, transparent);
+  opacity: 1;
+}
+.upload-drop__input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.upload-drop__hint {
+  font-size: 13px;
+}
+
+.upload-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+}
+.upload-tags__label {
+  opacity: 0.7;
+}
+.upload-tag {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: transparent;
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.upload-tag:hover {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+.upload-tag.is-active {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  font-weight: 600;
+}
+
+.upload-error {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.upload-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 48px 16px;
+  background: var(--card-bg, #fff);
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, #10b981 30%, transparent);
+  color: #059669;
+}
+.upload-success h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.upload-success p {
+  margin: 0;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+.upload-success__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* 章节编辑器 */
+.upload-form__chapters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.upload-form__chapters-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.upload-form__chapters-head h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.upload-chapter {
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.upload-chapter__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.upload-chapter__num {
+  font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in srgb, currentColor 50%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.upload-chapter__title {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  background: var(--card-bg, #fff);
+  color: inherit;
+  font-size: 14px;
+  outline: none;
+}
+.upload-chapter__body {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  background: var(--card-bg, #fff);
+  color: inherit;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  outline: none;
+  resize: vertical;
+  min-height: 120px;
+}
