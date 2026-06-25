@@ -91,3 +91,66 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* =========================================================
+ * Error variant
+ * 红色感叹号 + 文案 + 重试按钮。用于页面/区块数据加载失败。
+ * 与 spinner 共用 .page-loading 容器样式（居中、间距），通过 modifier 切色。
+ * ========================================================= */
+.page-loading--error {
+  color: var(--color-text-muted, #a8adb8);
+  gap: 0.9rem;
+}
+
+.page-loading__error-icon {
+  width: 2.6rem;
+  height: 2.6rem;
+  padding: 0.4rem;
+  border-radius: 50%;
+  background: var(--danger-soft, rgba(241, 85, 108, 0.14));
+  color: var(--danger, #f1556c);
+  box-sizing: border-box;
+  stroke-width: 2.2;
+}
+
+.page-loading__error-text {
+  margin: 0;
+  max-width: 28rem;
+  text-align: center;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--text-default, #d8d9de);
+  overflow-wrap: anywhere;
+}
+
+.page-loading__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  margin-top: 0.25rem;
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.09));
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-surface, #14161c);
+  color: var(--text-strong, #f5f5f7);
+  font-size: 0.875rem;
+  font-weight: var(--weight-medium, 500);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.page-loading__retry:hover {
+  background: var(--bg-elevated, #1b1e26);
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.16));
+}
+
+.page-loading__retry:active {
+  transform: scale(0.97);
+}
+
+.page-loading__retry:focus-visible {
+  outline: 2px solid var(--accent, #ff8a3c);
+  outline-offset: 2px;
+}
