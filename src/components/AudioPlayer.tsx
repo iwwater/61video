@@ -25,6 +25,11 @@ type Props = {
   /** 循环模式:off=停,all=全部循环,one=单曲循环(audio.loop=true) */
   loopMode: LoopMode;
   onLoopModeChange: (mode: LoopMode) => void;
+  /**
+   * compact=true:不渲染大 hero 区块(标题 + 海报 + Music4 圆形占位),
+   * 只渲染内联控件。详情页在大唱片布局里用这个模式,大封面/标题由父组件渲染。
+   */
+  compact?: boolean;
 };
 
 // 倍速档位
@@ -72,6 +77,7 @@ export function AudioPlayer({
   onProgress,
   loopMode,
   onLoopModeChange,
+  compact = false,
 }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const isFirstSrc = useRef(true);
@@ -155,22 +161,24 @@ export function AudioPlayer({
   const timerDisplay = timerMinutes > 0 ? formatMmSs(remainingSec) : null;
 
   return (
-    <div className="audio-player">
-      <div
-        className="audio-player__hero"
-        style={poster ? { backgroundImage: `url(${poster})` } : undefined}
-      >
-        <div className="audio-player__overlay" />
-        <div className="audio-player__content">
-          <span className="audio-player__icon" aria-hidden="true">
-            <Music4 size={28} />
-          </span>
-          <div className="audio-player__meta">
-            <span className="audio-player__eyebrow">Audio</span>
-            <strong className="audio-player__title">{title}</strong>
+    <div className={`audio-player${compact ? " audio-player--compact" : ""}`}>
+      {!compact && (
+        <div
+          className="audio-player__hero"
+          style={poster ? { backgroundImage: `url(${poster})` } : undefined}
+        >
+          <div className="audio-player__overlay" />
+          <div className="audio-player__content">
+            <span className="audio-player__icon" aria-hidden="true">
+              <Music4 size={28} />
+            </span>
+            <div className="audio-player__meta">
+              <span className="audio-player__eyebrow">Audio</span>
+              <strong className="audio-player__title">{title}</strong>
+            </div>
           </div>
         </div>
-      </div>
+      )}
       <div className="audio-player__controls">
         <audio
           ref={audioRef}

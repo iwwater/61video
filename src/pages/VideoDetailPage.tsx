@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ListMusic } from "lucide-react";
+import { ListMusic, Music4 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { AudioPlayer } from "@/components/AudioPlayer";
@@ -323,25 +323,81 @@ export default function VideoDetailPage() {
         />
 
         <div className="container vd-page__inner">
-          <div className="vd-layout">
-            <div className="vd-main" ref={detailTopRef}>
-              <div className="vd-player-wrap">
-                <div className="vd-player">
-                  {detail.mediaType === "audio" ? (
-                    <AudioPlayer
-                      src={detail.mediaSrc || detail.videoSrc}
-                      poster={detail.poster}
-                      title={detail.title}
-                      hasPrev={hasPrevAudio}
-                      hasNext={hasNextAudio}
-                      onPrev={handlePrevAudio}
-                      onNext={handleNextAudio}
-                      onPlay={handleFirstPlay}
-                      onProgress={handleProgress}
-                      loopMode={loopMode}
-                      onLoopModeChange={setLoopMode}
+          {isAudio ? (
+            // 音频详情:大唱片 + 内联控件 + 侧栏队列(网易云全屏播放页风格)
+            <div className="vd-audio">
+              <div className="vd-audio__main" ref={detailTopRef}>
+                <div className="vd-audio__cover">
+                  {detail.poster ? (
+                    <img
+                      className="vd-audio__cover-img"
+                      src={detail.poster}
+                      alt={detail.title}
                     />
                   ) : (
+                    <div className="vd-audio__cover-placeholder" aria-hidden="true">
+                      <Music4 size={72} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="vd-audio__meta">
+                  <h1 className="vd-audio__title">{detail.title}</h1>
+                  <div className="vd-audio__sub">
+                    {detail.author && <span>{detail.author}</span>}
+                    {detail.sourceLabel && <span>· {detail.sourceLabel}</span>}
+                    {detail.duration && <span>· {detail.duration}</span>}
+                  </div>
+                </div>
+
+                <div className="vd-audio__player">
+                  <AudioPlayer
+                    src={detail.mediaSrc || detail.videoSrc}
+                    poster={detail.poster}
+                    title={detail.title}
+                    hasPrev={hasPrevAudio}
+                    hasNext={hasNextAudio}
+                    onPrev={handlePrevAudio}
+                    onNext={handleNextAudio}
+                    onPlay={handleFirstPlay}
+                    onProgress={handleProgress}
+                    loopMode={loopMode}
+                    onLoopModeChange={setLoopMode}
+                    compact
+                  />
+                </div>
+
+                <section className="vd-audio__manage" aria-label="曲目管理">
+                  <VideoActions
+                    video={detail}
+                    onDeleteVideo={handleOpenDelete}
+                    deleteSaving={deleteSaving}
+                  />
+                  <VideoInfoPanel
+                    video={detail}
+                    availableTags={tags}
+                    tagSaving={tagSaving}
+                    onTagsChange={handleTagsChange}
+                  />
+                </section>
+              </div>
+
+              {audioIndex >= 0 && audioQueue.length > 1 && (
+                <aside className="vd-audio__queue" aria-label="队列">
+                  <AudioUpNext
+                    queue={audioQueue}
+                    currentIndex={audioIndex}
+                    onJump={jumpToAudioItem}
+                  />
+                </aside>
+              )}
+            </div>
+          ) : (
+            // 视频详情:原有布局 (播放器 + 元信息 + 右侧推荐视频)
+            <div className="vd-layout">
+              <div className="vd-main" ref={detailTopRef}>
+                <div className="vd-player-wrap">
+                  <div className="vd-player">
                     <VideoPlayer
                       id={detail.id}
                       src={detail.mediaSrc || detail.videoSrc}
@@ -352,40 +408,30 @@ export default function VideoDetailPage() {
                       onFirstPlay={handleFirstPlay}
                       onProgress={handleProgress}
                     />
-                  )}
+                  </div>
                 </div>
+
+                <section className="vd-summary" aria-label="当前视频">
+                  <VideoMetaHeader video={detail} />
+
+                  <VideoActions
+                    video={detail}
+                    onDeleteVideo={handleOpenDelete}
+                    deleteSaving={deleteSaving}
+                  />
+                </section>
+
+                <VideoInfoPanel
+                  video={detail}
+                  availableTags={tags}
+                  tagSaving={tagSaving}
+                  onTagsChange={handleTagsChange}
+                />
               </div>
 
-              <section className="vd-summary" aria-label="当前视频">
-                <VideoMetaHeader video={detail} />
-
-                <VideoActions
-                  video={detail}
-                  onDeleteVideo={handleOpenDelete}
-                  deleteSaving={deleteSaving}
-                />
-              </section>
-
-              <VideoInfoPanel
-                video={detail}
-                availableTags={tags}
-                tagSaving={tagSaving}
-                onTagsChange={handleTagsChange}
-              />
-
-              {isAudio && audioIndex >= 0 && audioQueue.length > 1 && (
-                <AudioUpNext
-                  queue={audioQueue}
-                  currentIndex={audioIndex}
-                  onJump={jumpToAudioItem}
-                />
-              )}
+              <RecommendedRail videos={detail.relatedVideos} />
             </div>
-
-            {/* 右侧推荐视频不与音频场景契合（音频用户更关心队列/同专辑/同作者），
-                视频详情保留。 */}
-            {!isAudio && <RecommendedRail videos={detail.relatedVideos} />}
-          </div>
+          )}
         </div>
       </div>
 

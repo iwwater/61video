@@ -95,6 +95,14 @@
   background: #080a10;
 }
 
+/* compact 模式:大唱片布局里只用控件(原生 audio + 上下首 + 倍速/定时/循环),
+   hero 由父组件渲染。去掉 16:9 强制比与深色背景。 */
+.audio-player--compact {
+  aspect-ratio: auto;
+  background: transparent;
+  display: block;
+}
+
 .audio-player__hero {
   position: relative;
   display: flex;
@@ -1557,6 +1565,109 @@
 .vd-tag-editor__btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* ---------- Audio 详情页:大唱片 + 侧栏队列(网易云全屏播放页风格) ---------- */
+.vd-audio {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-5);
+}
+
+@media (min-width: 1024px) {
+  .vd-audio {
+    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+    gap: var(--space-6);
+    align-items: start;
+  }
+}
+
+.vd-audio__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.vd-audio__cover {
+  position: relative;
+  width: 100%;
+  max-width: 380px;
+  aspect-ratio: 1 / 1;
+  margin: 0 auto;
+  border-radius: 24px;
+  overflow: hidden;
+  background: linear-gradient(145deg, rgba(26, 34, 54, 0.96), rgba(9, 11, 17, 0.98));
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.55);
+}
+
+.vd-audio__cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.vd-audio__cover-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.vd-audio__meta {
+  text-align: center;
+}
+
+.vd-audio__title {
+  margin: 0;
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: var(--weight-bold);
+  color: var(--text-strong);
+  line-height: 1.2;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vd-audio__sub {
+  margin-top: var(--space-2);
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+}
+
+.vd-audio__player {
+  /* compact 模式下 AudioPlayer 内联控件,与上方留呼吸距离 */
+  padding: var(--space-2) 0 0;
+}
+
+.vd-audio__manage {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.vd-audio__queue {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 1024px) {
+  .vd-audio__queue {
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100vh - var(--space-7));
+  }
 }
 
 /* ---------- Audio up-next (队列) ---------- */
