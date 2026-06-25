@@ -15,6 +15,22 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  build: {
+    target: "es2020",
+    sourcemap: false,
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          artplayer: ["artplayer"],
+          hlsjs: ["hls.js"],
+          pdf: ["@wojtekmaj/react-pdf", "pdfjs-dist"],
+        },
+      },
+    },
+  },
   server: {
     host: "0.0.0.0",
     port: 6191,
