@@ -97,3 +97,12 @@ preview:
 #     # 例如宿主机 /mnt/videos 挂载为 /media，就填写 /media。
 #     path: "/mnt/videos"
 drives: []
+
+# B 站解析器配置。可选；填了能拿更高画质。
+bilibili:
+  # SESSDATA cookie 的 value（不含 "SESSDATA=" 前缀）。
+  # 留空 = 未登录，最高只能拿到 480P。
+  # 填了之后，bilibili extractor 会在所有 B 站 API 请求里带上
+  # `Cookie: SESSDATA=<value>`，登录用户可拿到 1080P / 大会员画质。
+  # 推荐通过管理后台在「动漫链接解析」设置页里维护，不要直接改 yaml。
+  sessdata: ""
