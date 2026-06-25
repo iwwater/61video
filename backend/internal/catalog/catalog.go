@@ -99,6 +99,10 @@ func (c *Catalog) avAliases() []string {
 // ---------- Video ----------
 
 type Video struct {
+	// RowID 是 videos 表的 SQLite rowid，FTS5 索引 videos_fts 用它跟视频行
+	// 关联。scanVideo 加载时填，调用方一般不用关心；fts.SearchVideos 内部
+	// 用来按 FTS 命中顺序回查 videos。
+	RowID             int64    `json:"-"`
 	ID                string   `json:"id"`
 	DriveID           string   `json:"driveId"`
 	FileID            string   `json:"fileId"`
@@ -498,7 +502,8 @@ func (c *Catalog) ListContinueWatching(ctx context.Context, limit int) ([]*Video
 		limit = 10
 	}
 	rows, err := c.db.QueryContext(ctx, `
-		SELECT id, drive_id, file_id, file_name, content_hash, sampled_sha256,
+		SELECT rowid,
+		       id, drive_id, file_id, file_name, content_hash, sampled_sha256,
 		       fingerprint_status, fingerprint_error, parent_id, title, author,
 		       COALESCE(tags, '[]'),
 		       duration_seconds, size_bytes, ext, media_type, quality,
@@ -1485,10 +1490,10 @@ func (c *Catalog) UpdateVideoFingerprint(ctx context.Context, id, sampledSHA256,
 }
 
 type ListParams struct {
-	Keyword               string
-	DriveID               string
-	Tag                   string
-	Category              string
+	Keyword  string
+	DriveID  string
+	Tag      string
+	Category string
 	// MediaType 过滤媒体类型。空 = 不限；取值 "video" / "audio"。
 	// 任意非法值按不限处理。
 	MediaType             string
@@ -2357,7 +2362,7 @@ COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_sta
 COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
 views, COALESCE(last_viewed_at, 0), COALESCE(progress_seconds, 0), COALESCE(progress_at, 0), favorites, comments, likes, dislikes,
 COALESCE(category, ''), COALESCE(hidden, 0), COALESCE(badges, '[]'), COALESCE(description, ''),
-published_at, created_at, updated_at
+published_at, created_at, updated_at, rowid
 `
 
 const activeDriveWhereSQL = `(videos.drive_id = 'local-upload'
@@ -2429,7 +2434,7 @@ func scanVideo(row rowScanner) (*Video, error) {
 		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
 		&v.Views, &lastViewedAt, &v.ProgressSeconds, &progressAt, &v.Favorites, &v.Comments, &v.Likes, &v.Dislikes,
 		&v.Category, &hidden, &badgesJSON, &v.Description,
-		&publishedAt, &createdAt, &updatedAt,
+		&publishedAt, &createdAt, &updatedAt, &v.RowID,
 	)
 	if err != nil {
 		return nil, err

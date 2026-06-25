@@ -23,8 +23,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/video-site/backend/internal/animeparser"
-	"github.com/video-site/backend/internal/resourcesearch"
-	"github.com/video-site/backend/internal/safefetch"
 	"github.com/video-site/backend/internal/auth"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives/localstorage"
@@ -33,6 +31,8 @@ import (
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/mediatype"
 	"github.com/video-site/backend/internal/proxy"
+	"github.com/video-site/backend/internal/resourcesearch"
+	"github.com/video-site/backend/internal/safefetch"
 )
 
 const localUploadDriveID = localupload.DriveID
@@ -87,19 +87,19 @@ const (
 
 // VideoDTO 是返回给前端的视频对象，字段名跟前端 VideoItem 对齐
 type VideoDTO struct {
-	ID              string   `json:"id"`
-	MediaType       string   `json:"mediaType"`
-	Href            string   `json:"href"`
-	Title           string   `json:"title"`
-	Thumbnail       string   `json:"thumbnail"`
-	PreviewSrc      string   `json:"previewSrc"`
-	PreviewDuration int      `json:"previewDuration"`
-	PreviewStrategy string   `json:"previewStrategy"`
-	Duration        string   `json:"duration"`
+	ID              string `json:"id"`
+	MediaType       string `json:"mediaType"`
+	Href            string `json:"href"`
+	Title           string `json:"title"`
+	Thumbnail       string `json:"thumbnail"`
+	PreviewSrc      string `json:"previewSrc"`
+	PreviewDuration int    `json:"previewDuration"`
+	PreviewStrategy string `json:"previewStrategy"`
+	Duration        string `json:"duration"`
 	// DurationSeconds：原始秒数（前端用于算进度条比例）。
-	DurationSeconds int     `json:"durationSeconds"`
+	DurationSeconds int `json:"durationSeconds"`
 	// ProgressSeconds：客户端最后一次上报的 currentTime（0=未看；>=duration-30 视为看完）。
-	ProgressSeconds float64 `json:"progressSeconds"`
+	ProgressSeconds float64  `json:"progressSeconds"`
 	Badges          []string `json:"badges"`
 	Quality         string   `json:"quality,omitempty"`
 	SourceLabel     string   `json:"sourceLabel,omitempty"`
@@ -352,9 +352,27 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUnifiedSearch 是顶栏搜索的入口。同时返回本地视频 + 资源站结果。
-//   ?q=<keyword>&include=local,external（默认都包含）
-// 外部源不传 page（并发拉每个源，固定 6 条/源），本地库分页。
+//
+// Query params:
+//
+//	q=<keyword>                       必填
+//	include=local,external            默认两个都返回
+//	type=video|audio                  可选，按媒体类型过滤本地视频
+//	limit=<n>                         本地视频条数（默认 6，最大 100）
+//	offset=<n>                        本地视频偏移（默认 0）
+//
+// Response shape（向后兼容，老字段 local/remote 保留用于统计面板）：
+//
+//	items     []unifiedSearchItem
+//	total     int                     本地命中总数 + 外部命中条数
+//	took_ms   int                     服务端处理耗时（毫秒）
+//	query     string
+//	local     int                     本地命中条数（<= len(items) 上限）
+//	remote    int                     外部命中条数
+//
+// 本地视频搜索由 SQLite FTS5 索引驱动（videos_fts），外部源走 runAnimeSearch。
 func (s *Server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("q is required"))
@@ -368,53 +386,76 @@ func (s *Server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 	wantLocal := include == "" || strings.Contains(include, "local")
 	wantExternal := include == "" || strings.Contains(include, "external")
 
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 6
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	mediaType := r.URL.Query().Get("type")
+
 	ctx := r.Context()
 	items := []unifiedSearchItem{}
-	var localCount, remoteCount int
+	var localCount, remoteCount, localTotal int
 
 	if wantLocal && s.Catalog != nil {
-		// 本地视频（最新命中 6 条）
-		videos, _, _ := s.Catalog.ListVideos(ctx, catalog.ListParams{
-			Keyword: q, Sort: "latest", Page: 1, PageSize: 6,
+		// 本地视频走 FTS5 索引（videos_fts），按 bm25 排序。
+		// SearchVideos 内部已经过滤 hidden=0；count 用独立的 COUNT(*) 拿真实总数。
+		videos, total, err := s.Catalog.SearchVideos(ctx, q, catalog.SearchOptions{
+			MediaType: mediaType,
+			Limit:     limit,
+			Offset:    offset,
 		})
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		localTotal = total
 		for _, v := range videos {
 			if v == nil {
 				continue
 			}
 			items = append(items, unifiedSearchItem{
-				Type:       "video",
-				ID:         v.ID,
-				Title:      v.Title,
-				Subtitle:   v.Author,
-				Cover:      v.ThumbnailURL,
-				Href:       "/video/" + pathSegment(v.ID),
-				Source:     "local",
+				Type:            "video",
+				ID:              v.ID,
+				Title:           v.Title,
+				Subtitle:        v.Author,
+				Cover:           v.ThumbnailURL,
+				Href:            "/video/" + pathSegment(v.ID),
+				Source:          "local",
 				ProgressSeconds: v.ProgressSeconds,
 			})
 			localCount++
 		}
-		// 本地小说
-		novels, _, _ := s.Catalog.ListNovelSets(ctx, catalog.ListNovelSetsParams{
-			Page: 1, PageSize: 6, Sort: "latest", Tag: "",
-		})
-		for _, n := range novels {
-			if n == nil {
-				continue
-			}
-			titleLow := strings.ToLower(n.Title + n.Author)
-			if !strings.Contains(titleLow, strings.ToLower(q)) {
-				continue
-			}
-			items = append(items, unifiedSearchItem{
-				Type:     "novel",
-				ID:       n.ID,
-				Title:    n.Title,
-				Subtitle: n.Author,
-				Cover:    n.CoverURL,
-				Href:     "/novel/" + n.ID,
-				Source:   "local",
+		// 本地小说（FTS 不覆盖小说，这里沿用 LIKE 模糊匹配；体量小不影响性能）
+		if mediaType == "" { // type 过滤对小说没意义，跳过
+			novels, _, _ := s.Catalog.ListNovelSets(ctx, catalog.ListNovelSetsParams{
+				Page: 1, PageSize: 6, Sort: "latest", Tag: "",
 			})
-			localCount++
+			for _, n := range novels {
+				if n == nil {
+					continue
+				}
+				titleLow := strings.ToLower(n.Title + n.Author)
+				if !strings.Contains(titleLow, strings.ToLower(q)) {
+					continue
+				}
+				items = append(items, unifiedSearchItem{
+					Type:     "novel",
+					ID:       n.ID,
+					Title:    n.Title,
+					Subtitle: n.Author,
+					Cover:    n.CoverURL,
+					Href:     "/novel/" + n.ID,
+					Source:   "local",
+				})
+				localCount++
+			}
 		}
 	}
 
@@ -426,11 +467,14 @@ func (s *Server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 		remoteCount += len(animeItems)
 	}
 
+	took := time.Since(start).Milliseconds()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":  items,
-		"query":  q,
-		"local":  localCount,
-		"remote": remoteCount,
+		"items":   items,
+		"total":   localTotal + remoteCount,
+		"took_ms": took,
+		"query":   q,
+		"local":   localCount,
+		"remote":  remoteCount,
 	})
 }
 
@@ -494,17 +538,17 @@ func (s *Server) runAnimeSearch(ctx context.Context, kw string) []unifiedSearchI
 }
 
 type unifiedSearchItem struct {
-	Type           string  `json:"type"`                     // video | novel | source | resource
-	ID             string  `json:"id"`
-	Title          string  `json:"title"`
-	Subtitle       string  `json:"subtitle,omitempty"`
-	Cover          string  `json:"cover,omitempty"`
-	Href           string  `json:"href,omitempty"`
-	URL            string  `json:"url,omitempty"`
-	Source         string  `json:"source,omitempty"`
-	DirectPlay     bool    `json:"directPlay,omitempty"`
-	SiteID         string  `json:"siteId,omitempty"`
-	VodID          string  `json:"vodId,omitempty"`
+	Type            string  `json:"type"` // video | novel | source | resource
+	ID              string  `json:"id"`
+	Title           string  `json:"title"`
+	Subtitle        string  `json:"subtitle,omitempty"`
+	Cover           string  `json:"cover,omitempty"`
+	Href            string  `json:"href,omitempty"`
+	URL             string  `json:"url,omitempty"`
+	Source          string  `json:"source,omitempty"`
+	DirectPlay      bool    `json:"directPlay,omitempty"`
+	SiteID          string  `json:"siteId,omitempty"`
+	VodID           string  `json:"vodId,omitempty"`
 	ProgressSeconds float64 `json:"progressSeconds,omitempty"`
 }
 
@@ -1782,14 +1826,14 @@ func mapNovelChapters(chapters []catalog.NovelChapter) []NovelChapterDTO {
 
 // createNovelReq 是 POST /api/novels 的入参。
 type createNovelReq struct {
-	ID          string              `json:"id"`
-	Title       string              `json:"title"`
-	Author      string              `json:"author"`
-	CoverURL    string              `json:"coverUrl"`
-	ContentType string              `json:"contentType"` // text | pdf
-	Tags        []string            `json:"tags"`
-	Description string              `json:"description"`
-	Chapters    []createNovelChReq  `json:"chapters"`
+	ID          string             `json:"id"`
+	Title       string             `json:"title"`
+	Author      string             `json:"author"`
+	CoverURL    string             `json:"coverUrl"`
+	ContentType string             `json:"contentType"` // text | pdf
+	Tags        []string           `json:"tags"`
+	Description string             `json:"description"`
+	Chapters    []createNovelChReq `json:"chapters"`
 }
 
 type createNovelChReq struct {
@@ -1992,14 +2036,14 @@ func (s *Server) handleAnimeIframe(w http.ResponseWriter, r *http.Request) {
 // ---------- 影视搜索 ----------
 
 type animeSearchItem struct {
-	Type       string `json:"type"`               // "video" | "novel" | "source" | "resource"
-	ID         string `json:"id"`                 // 视频/小说 ID，或 源 ID
+	Type       string `json:"type"` // "video" | "novel" | "source" | "resource"
+	ID         string `json:"id"`   // 视频/小说 ID，或 源 ID
 	Title      string `json:"title"`
-	Subtitle   string `json:"subtitle,omitempty"`  // 作者/集数/资源站
+	Subtitle   string `json:"subtitle,omitempty"` // 作者/集数/资源站
 	Cover      string `json:"cover,omitempty"`
-	Href       string `json:"href,omitempty"`     // 前台点击跳转的 URL（视频/小说详情页）
-	URL        string `json:"url,omitempty"`      // 外部源：需要后续 parse 的 URL
-	Source     string `json:"source,omitempty"`   // local / 源名
+	Href       string `json:"href,omitempty"`       // 前台点击跳转的 URL（视频/小说详情页）
+	URL        string `json:"url,omitempty"`        // 外部源：需要后续 parse 的 URL
+	Source     string `json:"source,omitempty"`     // local / 源名
 	DirectPlay bool   `json:"directPlay,omitempty"` // resource 专用：true=直链 m3u8/mp4
 	SiteID     string `json:"siteId,omitempty"`     // resource 专用：资源站 ID
 	VodID      string `json:"vodId,omitempty"`      // resource 专用：资源站侧 ID（用于拉详情）
@@ -2007,10 +2051,10 @@ type animeSearchItem struct {
 
 type animeSearchResponse struct {
 	Items  []animeSearchItem `json:"items"`
-	Total  int              `json:"total"`
-	Query  string           `json:"query"`
-	Local  int              `json:"localCount"`
-	Remote int              `json:"remoteCount"`
+	Total  int               `json:"total"`
+	Query  string            `json:"query"`
+	Local  int               `json:"localCount"`
+	Remote int               `json:"remoteCount"`
 }
 
 // handleAnimeSearch 综合搜索：本地视频 + 本地小说 + 已配置外部源。
@@ -2191,15 +2235,15 @@ func (s *Server) handleAnimeSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type item struct {
-		ID         string `json:"id"`
-		Name       string `json:"name"`
-		Kind       string `json:"kind"`
-		CanSearch  bool   `json:"canSearch"`
-		CanParse   bool   `json:"canParse"`
-		IsIframe   bool   `json:"isIframe"`
-		SearchURL  string `json:"searchUrl,omitempty"`
-		ParseURL   string `json:"parseUrl,omitempty"`
-		Note       string `json:"note"`
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Kind      string `json:"kind"`
+		CanSearch bool   `json:"canSearch"`
+		CanParse  bool   `json:"canParse"`
+		IsIframe  bool   `json:"isIframe"`
+		SearchURL string `json:"searchUrl,omitempty"`
+		ParseURL  string `json:"parseUrl,omitempty"`
+		Note      string `json:"note"`
 	}
 	out := make([]item, 0, len(sources)+1)
 	out = append(out, item{
@@ -2210,7 +2254,7 @@ func (s *Server) handleAnimeSources(w http.ResponseWriter, r *http.Request) {
 		out = append(out, item{
 			ID: s.ID, Name: s.Name, Kind: s.Kind,
 			CanSearch: s.SupportsSearch(), CanParse: s.SupportsParse(),
-			IsIframe: s.IsIframe(),
+			IsIframe:  s.IsIframe(),
 			SearchURL: s.SearchURL, ParseURL: s.ParseURL,
 			Note: s.Note,
 		})

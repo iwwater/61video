@@ -327,3 +327,63 @@ CREATE TABLE IF NOT EXISTS resource_sites (
 
 CREATE INDEX IF NOT EXISTS idx_resource_sites_sort ON resource_sites(sort, name);
 CREATE INDEX IF NOT EXISTS idx_resource_sites_enabled ON resource_sites(enabled);
+
+-- 全文搜索索引（FTS5 / contentless）
+--
+-- 没用 external content 模式（content='videos'）——modernc.org/sqlite 在 external
+-- content 下 SELECT 出 UNINDEXED 列会报 "no such column: T.video_id"。所以采用
+-- 完全 contentless：FTS 内部自己存 title/description/tags 副本，由下面三个 trigger
+-- 维护一致性。所有写 videos 的路径（UpsertVideo / UpdateVideoMeta / DeleteVideo /
+-- DeleteVideoWithTombstone / scanner 直 SQL 等）自动同步 FTS，调用方不需额外逻辑。
+--
+-- 字段选择：只索引标题/描述/标签这三个最常用来搜的字段。tags 是 videos.tags 列
+-- 里存的 JSON array，trigger 里用 REPLACE 把 []"/, 这几个字符折叠成空格，避免
+-- FTS5 把整个 JSON 串当成一个 token。
+--
+-- 分词器：trigram（三字符滑窗）。这是为了兼顾中文搜索——unicode61 把连续
+-- CJK 字符当成一个 token，"黎明破晓的风景" 整个是一个 token，搜 "破晓" 永远命中
+-- 不了。trigram 把字符串切成每 3 字符一个 token 的窗口（"黎明破晓的风景" →
+-- 黎明破 / 明破晓 / 破晓的 / 晓的风 / 的风景），用户搜 "破晓" 直接命中中间
+-- 那个 token。英文短语不受影响（每 3 字符一窗，搜索 "wars" 也能命中
+-- "star wars"）。代价：索引体积约 3-5 倍，10w 行 videos 也在 MB 量级，可接受。
+--
+-- 注意 trigram 不支持 remove_diacritics（它只切 3-char 窗口，不做归一化）。
+-- modernc.org/sqlite 默认带 FTS5 编译（vendor 里能看到
+-- -DSQLITE_ENABLE_FTS5），无需 build tag 或换驱动。
+CREATE VIRTUAL TABLE IF NOT EXISTS videos_fts USING fts5(
+    video_id UNINDEXED,
+    title,
+    description,
+    tags,
+    tokenize='trigram'
+);
+
+-- 触发器全部 IF NOT EXISTS，Open() 每次都会跑 schema.sql，重跑不报错。
+-- 注意：contentless FTS5 表不支持 'delete' 命令，必须用 DELETE FROM videos_fts WHERE rowid=?。
+CREATE TRIGGER IF NOT EXISTS videos_fts_ai AFTER INSERT ON videos BEGIN
+  INSERT INTO videos_fts(rowid, video_id, title, description, tags)
+  VALUES (
+    new.rowid,
+    new.id,
+    COALESCE(new.title, ''),
+    COALESCE(new.description, ''),
+    -- 把 ["foo","bar"] 这种 JSON 折叠成 "foo bar"，让 FTS5 把它当多 token 索引。
+    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(new.tags, ''), '[', ' '), ']', ' '), '"', ' '), ',', ' '), '\n', ' ')
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS videos_fts_ad AFTER DELETE ON videos BEGIN
+  DELETE FROM videos_fts WHERE rowid = old.rowid;
+END;
+
+CREATE TRIGGER IF NOT EXISTS videos_fts_au AFTER UPDATE ON videos BEGIN
+  DELETE FROM videos_fts WHERE rowid = old.rowid;
+  INSERT INTO videos_fts(rowid, video_id, title, description, tags)
+  VALUES (
+    new.rowid,
+    new.id,
+    COALESCE(new.title, ''),
+    COALESCE(new.description, ''),
+    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(new.tags, ''), '[', ' '), ']', ' '), '"', ' '), ',', ' '), '\n', ' ')
+  );
+END;
