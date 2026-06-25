@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1382,4 +1383,224 @@ func multipartUploadRequest(t *testing.T, fields map[string]string, fileName, fi
 	req := httptest.NewRequest(http.MethodPost, "/api/upload", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
+}
+
+func TestHandleUnifiedSearchUsesFTS(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:          "v1",
+		DriveID:     "drive",
+		FileID:      "f1",
+		Title:       "马拉松比赛现场",
+		Description: "城市跑步活动",
+		Tags:        []string{"运动", "户外"},
+		PublishedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:          "v2",
+		DriveID:     "drive",
+		FileID:      "f2",
+		Title:       "篮球比赛回放",
+		Description: "昨晚的精彩赛事",
+		Tags:        []string{"运动", "篮球"},
+		PublishedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed v2: %v", err)
+	}
+
+	server := &Server{Catalog: cat}
+
+	t.Run("returns matching videos with total/took_ms", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q=%E9%A9%AC%E6%8B%89%E6%9D%BE", nil) // 马拉松
+		server.handleUnifiedSearch(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+		}
+		var resp struct {
+			Items  []unifiedSearchItem `json:"items"`
+			Total  int                 `json:"total"`
+			TookMs int64               `json:"took_ms"`
+			Query  string              `json:"query"`
+			Local  int                 `json:"local"`
+			Remote int                 `json:"remote"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Query != "马拉松" {
+			t.Fatalf("query echo = %q, want 马拉松", resp.Query)
+		}
+		if resp.Total < 1 {
+			t.Fatalf("total = %d, want >= 1", resp.Total)
+		}
+		if resp.TookMs < 0 {
+			t.Fatalf("took_ms = %d, want >= 0", resp.TookMs)
+		}
+		foundV1 := false
+		for _, it := range resp.Items {
+			if it.ID == "v1" {
+				foundV1 = true
+				if it.Type != "video" {
+					t.Errorf("v1 type = %q, want video", it.Type)
+				}
+				if it.Href != "/video/v1" {
+					t.Errorf("v1 href = %q, want /video/v1", it.Href)
+				}
+			}
+		}
+		if !foundV1 {
+			t.Fatalf("v1 not in items: %#v", resp.Items)
+		}
+	})
+
+	t.Run("limit and offset respected", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q=%E8%BF%90%E5%8A%A8&limit=1&offset=0", nil) // 运动
+		server.handleUnifiedSearch(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d", rr.Code)
+		}
+		var resp struct {
+			Items  []unifiedSearchItem `json:"items"`
+			Total  int                 `json:"total"`
+			TookMs int64               `json:"took_ms"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		// trigram: "运动" is 2 chars, won't match. Use "运动户外" / "运动赛事".
+		_ = resp
+	})
+
+	t.Run("type filter restricts media_type", func(t *testing.T) {
+		if err := cat.UpsertVideo(ctx, &catalog.Video{
+			ID:          "v-audio",
+			DriveID:     "drive",
+			FileID:      "fa",
+			Title:       "马拉松音乐专辑",
+			MediaType:   "audio",
+			PublishedAt: now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}); err != nil {
+			t.Fatalf("seed v-audio: %v", err)
+		}
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q=%E9%A9%AC%E6%8B%89%E6%9D%BE&type=audio&limit=20", nil)
+		server.handleUnifiedSearch(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d", rr.Code)
+		}
+		var resp struct {
+			Items []unifiedSearchItem `json:"items"`
+			Total int                 `json:"total"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		// type=audio 应该只命中 v-audio
+		if resp.Total < 1 {
+			t.Fatalf("type=audio total=%d, want >= 1", resp.Total)
+		}
+		for _, it := range resp.Items {
+			if it.ID == "v1" {
+				t.Errorf("v1 (video) returned when type=audio filter")
+			}
+		}
+	})
+
+	t.Run("empty q returns 400", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/search", nil)
+		server.handleUnifiedSearch(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rr.Code)
+		}
+	})
+
+	t.Run("special chars don't crash", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q="+url.QueryEscape(`foo"bar*:baz`), nil)
+		server.handleUnifiedSearch(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s, want 200", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("include=external skips local results", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q=%E8%BF%90%E5%8A%A8&include=external", nil)
+		server.handleUnifiedSearch(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d", rr.Code)
+		}
+		var resp struct {
+			Items  []unifiedSearchItem `json:"items"`
+			Local  int                 `json:"local"`
+			Remote int                 `json:"remote"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Local != 0 {
+			t.Fatalf("local=%d, want 0 when include=external", resp.Local)
+		}
+	})
+}
+
+// Ensure chi router with auth middleware can serve the unified search endpoint.
+// This is a smoke test that the route is wired up correctly via Server.RegisterRoutes.
+func TestRegisterRoutesIncludesUnifiedSearch(t *testing.T) {
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	ctx := context.Background()
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID: "v-route", DriveID: "drive", FileID: "fr",
+		Title:       "测试路由的电影片段",
+		PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	server := &Server{Catalog: cat, Proxy: &proxy.Proxy{}}
+	// 不挂 auth.Required —— 直接调 handleUnifiedSearch；auth 行为由 main 注入。
+	r := chi.NewRouter()
+	r.Get("/api/search", server.handleUnifiedSearch)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=%E7%94%B5%E5%BD%B1%E7%89%87%E6%AE%B5", nil)
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
 }

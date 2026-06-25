@@ -189,6 +189,13 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	if err := c.classifySystemTags(ctx); err != nil {
 		return err
 	}
+	// FTS5 一次性回填：把建索引之前已经在 videos 表里的行写进 videos_fts。
+	// 用 settings 表里 "videos_fts_backfilled"=1 做幂等 marker，避免每次启动都全量回填。
+	// 触发器 AFTER INSERT/UPDATE/DELETE 只对回填之后再写入的行生效，老数据必须
+	// 显式灌一次。
+	if err := c.backfillVideosFTS(ctx); err != nil {
+		return err
+	}
 	if err := c.clearVolatileOneDriveThumbnails(ctx); err != nil {
 		return err
 	}
