@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 type Props = {
@@ -22,7 +23,7 @@ function buildRange(current: number, last: number): (number | "...")[] {
   return result;
 }
 
-export function Pagination({ page, pageSize, total, onChange }: Props) {
+function PaginationInner({ page, pageSize, total, onChange }: Props) {
   const last = Math.max(1, Math.ceil(total / pageSize));
   if (last <= 1) return null;
 
@@ -65,3 +66,5 @@ export function Pagination({ page, pageSize, total, onChange }: Props) {
     </nav>
   );
 }
+
+export const Pagination = memo(PaginationInner);
