@@ -32,7 +32,10 @@ export function MainNav() {
       <div className="container main-nav__inner">
         <NavLink to="/" className="main-nav__logo">
           <span className="main-nav__logo-mark">
-            <img src="/icon.png" alt="" className="main-nav__logo-img" />
+            <picture>
+              <source srcSet="/icon.webp" type="image/webp" />
+              <img src="/icon.png" alt="" className="main-nav__logo-img" />
+            </picture>
           </span>
         </NavLink>
 

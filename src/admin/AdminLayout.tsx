@@ -22,6 +22,10 @@ import { SpiderIcon } from "./icons/SpiderIcon";
 // 避免普通访客首屏多拉一份 admin 样式。
 import "../styles/admin.css";
 
+// admin.css 只在后台路由被打开时按需加载，首页/视频详情页等不需要。
+// Vite 会把它打成单独的 chunk，首屏不再 bundle 118KB admin 样式。
+import("../styles/admin.css");
+
 export function AdminLayout() {
   const { logout } = useAuth();
   const navigate = useNavigate();
