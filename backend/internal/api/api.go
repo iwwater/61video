@@ -794,6 +794,9 @@ type ShortsItemDTO struct {
 //     （不能仅看 seenIds 长度，里面可能有隐藏、删除或历史脏 ID）
 func (s *Server) handleShortsNext(w http.ResponseWriter, r *http.Request) {
 	var body shortsNextReq
+	// seenIds 是客户端 localStorage 拼出来的 id 列表，单条 ~32B × 几百个条也才几 KB；
+	// 设 16KB 上限防恶意/异常客户端塞巨型 body 让服务端无脑分配。
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -863,6 +866,8 @@ type updateVideoTagsReq struct {
 func (s *Server) handleUpdateVideoTags(w http.ResponseWriter, r *http.Request) {
 	id := routeParam(r, "id")
 	var body updateVideoTagsReq
+	// tags 列表：单 tag 几十字符 × 上百个条也才几 KB；1MB 足够且防巨型 body。
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return

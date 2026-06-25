@@ -35,10 +35,17 @@ type CrawlerAssetCounts struct {
 }
 
 func Open(path string) (*Catalog, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)")
 	if err != nil {
 		return nil, err
 	}
+	// 连接池：现代c.org/sqlite 同进程内连接共享 pre-compiled statement cache，
+	// 多连接可让 preview/fingerprint/scanner goroutine 并行查询不互相 block。
+	// 上限 16 足以覆盖 night cron + 多盘 worker 并发；下限 8 避免空闲时频繁
+	// 重新打开。ConnMaxIdleTime 5min 防止长空闲句柄被服务端强断。
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(8)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)

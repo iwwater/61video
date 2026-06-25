@@ -49,6 +49,12 @@ CREATE INDEX IF NOT EXISTS idx_videos_drive ON videos(drive_id, file_id);
 CREATE INDEX IF NOT EXISTS idx_videos_pub   ON videos(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_views ON videos(views DESC);
 
+-- 2026-06 Opt-A 补充索引见 catalog.migrate()：
+--   放到 migrate() 而不是 schema.sql 是因为这些索引依赖后加的列
+--   (thumbnail_status / preview_status / fingerprint_status / hidden /
+--   content_hash / progress_seconds)，旧库先跑 schema.sql 再跑 migrate()
+--   加列——直接在 schema.sql CREATE INDEX 会因列不存在而失败。
+
 -- 统一标签池
 CREATE TABLE IF NOT EXISTS tags (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

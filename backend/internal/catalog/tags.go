@@ -165,6 +165,28 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_file_name_size_created ON videos(file_name, size_bytes, created_at, id)`); err != nil {
 		return err
 	}
+	// 2026-06 Opt-A 补齐的复合/部分索引（schema.sql 不放是因为旧库先跑
+	// schema.sql 再 addColumnIfMissing——在 schema.sql 里 CREATE INDEX 引用
+	// 还没加的列会直接 SQL error）。这里 migrate() 已在所有 addColumnIfMissing
+	// 之后执行，列都齐了。
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_thumb ON videos(drive_id, thumbnail_status)`); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_preview ON videos(drive_id, preview_status)`); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_fingerprint ON videos(drive_id, fingerprint_status)`); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_pub_hidden ON videos(published_at DESC) WHERE hidden = 0`); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_hash_dedup ON videos(content_hash, size_bytes) WHERE content_hash != ''`); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_progress ON videos(progress_at DESC) WHERE progress_seconds > 0`); err != nil {
+		return err
+	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_deleted_videos_drive_file ON deleted_videos(drive_id, file_id)`); err != nil {
 		return err
 	}

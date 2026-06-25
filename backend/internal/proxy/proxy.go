@@ -73,8 +73,20 @@ func New(r *Registry) *Proxy {
 	return &Proxy{
 		Registry: r,
 		cache:    make(map[string]cachedLink),
+		// 显式构造 Transport 给流式代理设合理超时：
+		//   - IdleConnTimeout 30s: 空闲连接被 server 关掉前主动关
+		//   - ResponseHeaderTimeout 10s: 等首字节响应的硬上限，防挂死的网盘源
+		//   - ExpectContinueTimeout 1s: 100-continue 头快速失败
+		//   - MaxIdleConnsPerHost 4: 同一 drive 复用 4 个空闲连接够了
+		// http.Client.Timeout 保持 0：流式 io.Copy 不应被全局超时切断，靠 ctx
+		// 和 Transport 各阶段超时分别把关。
 		http: &http.Client{
-			Timeout: 0, // 流式不设超时
+			Transport: &http.Transport{
+				IdleConnTimeout:       30 * time.Second,
+				ResponseHeaderTimeout: 10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+				MaxIdleConnsPerHost:   4,
+			},
 		},
 	}
 }
@@ -217,7 +229,19 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, link *drives.Strea
 	}
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	// 流式 io.Copy：客户端断开（r.Context().Done()）时让连接复用以释放 socket。
+	// 单纯靠 io.Copy(w, resp.Body) 不会感知客户端取消——下层 reader 仍在读
+	// 网盘，浪费上行带宽。net/http 实际会在 hijacker 关时返 ErrClosed，但等
+	// 不到时用 select 主动放弃。
+	closed := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(w, resp.Body)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-r.Context().Done():
+	}
 }
 
 // ServeLocal 服务本地预览视频文件
