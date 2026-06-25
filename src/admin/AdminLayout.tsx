@@ -18,6 +18,9 @@ import * as api from "./api";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./ToastContext";
 import { SpiderIcon } from "./icons/SpiderIcon";
+// admin.css 只在进入 /admin/* 路由后才需要；放这里动态 import，
+// 避免普通访客首屏多拉一份 admin 样式。
+import "../styles/admin.css";
 
 export function AdminLayout() {
   const { logout } = useAuth();
