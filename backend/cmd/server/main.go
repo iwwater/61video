@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	_ "github.com/video-site/backend/internal/animeparser/extractors/bilibili"
 	_ "github.com/video-site/backend/internal/animeparser/extractors/universal"
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/auth"
