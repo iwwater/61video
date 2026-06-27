@@ -1,7 +1,7 @@
 github.com/OpenListTeam/wopan-sdk-go v0.2.0 h1:i7nxcdDTIWEbMDlmZ4bFAjX4Dd3mWmf8SEfcateicSk=
 github.com/OpenListTeam/wopan-sdk-go v0.2.0/go.mod h1:otynv0CgSNUClPpUgZ44qCZGcMRe0dc83Pkk65xAunI=
-github.com/SheltonZhu/115driver v1.3.2 h1:GmIYqivI1Y647FHGwiAoQce1tDaY8YWNjk7hGLhbsqs=
-github.com/SheltonZhu/115driver v1.3.2/go.mod h1:OujS7azslg1/bn85sPSHnNsp4/WBI9/TiijtZL9kuSQ=
+github.com/SheltonZhu/115driver v1.3.3 h1:Bqs86D2MziYPgIOuOJF+HzG4d7GBr71ZhSCrs/U17UU=
+github.com/SheltonZhu/115driver v1.3.3/go.mod h1:OujS7azslg1/bn85sPSHnNsp4/WBI9/TiijtZL9kuSQ=
 github.com/aead/ecdh v0.2.0 h1:pYop54xVaq/CEREFEcukHRZfTdjiWvYIsZDXXrBapQQ=
 github.com/aead/ecdh v0.2.0/go.mod h1:a9HHtXuSo8J1Js1MwLQx2mBhkXMT6YwUmVVEY4tTB8U=
 github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible h1:8psS8a+wKfiLt1iVDX79F7Y6wUM49Lcha2FMXt4UM8g=
