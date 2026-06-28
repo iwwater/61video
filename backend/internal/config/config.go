@@ -37,6 +37,7 @@ type Config struct {
 	Nightly  Nightly  `yaml:"nightly"`
 	Drives   []Drive  `yaml:"drives"`
 	Bilibili Bilibili `yaml:"bilibili"`
+	Proxy    Proxy    `yaml:"proxy"`
 }
 
 type Server struct {
@@ -198,6 +199,17 @@ type Preview struct {
 	DurationSeconds int    `yaml:"duration_seconds"`
 	Width           int    `yaml:"width"`
 	Segments        int    `yaml:"segments"`
+	// OnDemand 控制预览视频生成时机：
+	//   false (默认) = 扫盘后立即批量入队，访问前就已生成。优点是首屏
+	//   立即可播；缺点是 1 万文件 = 20GB 磁盘 + N 小时 ffmpeg 排队。
+	//   true          = 扫盘后不入队预览视频；详情页首次访问时再入队。
+	//   缩略图始终批量生成（每条仅几十 KB）。
+	OnDemand bool `yaml:"on_demand"`
+	// DriveCap 单盘已生成预览视频文件数上限。0 表示不限制。超过时按
+	// mtime ASC 删除旧文件。OnDemand=true 时这个限制尤其有意义，避免
+	// 用户频繁访问不同视频撑爆磁盘。
+	// 当前实现：字段已读取，cleanup 逻辑待补全（v0.2.x）。
+	DriveCap int `yaml:"drive_cap"`
 }
 
 // Nightly 是凌晨流水线（扫盘 → 61 爬虫 → 迁移）的调度配置。
@@ -231,6 +243,18 @@ type Drive struct {
 // 字段语义：只填 SESSDATA 这一项的 value（不含 "SESSDATA=" 前缀）。
 type Bilibili struct {
 	SESSData string `yaml:"sessdata"`
+}
+
+// Proxy 网盘代理流的字节范围磁盘缓存配置。
+//
+// CacheDir 为空或 CacheBytes <= 0 时退化为无缓存（与旧行为一致——每次都打
+// 上游网盘）。打开后会把命中过的 (driveID, fileID, rangeStart, rangeEnd)
+// 元组写到磁盘；TTL 24h，超期自动重取；总大小超 cap 时按 mtime ASC 淘汰。
+//
+// 范围大小 > 16MB 的请求不缓存——这类大块基本是一次性下载，缓存下来命中率低。
+type Proxy struct {
+	CacheDir   string `yaml:"cache_dir"`
+	CacheBytes int64  `yaml:"cache_bytes"`
 }
 
 // Load 读取配置；若不存在则从 config.example.yaml 复制一份并返回
@@ -302,6 +326,8 @@ func (c *Config) applyDefaults() {
 	} else if c.Nightly.CronHour < 0 || c.Nightly.CronHour > 23 {
 		c.Nightly.CronHour = 1
 	}
+	// Proxy 缓存默认 0 = 关闭。需要用户显式写 cache_dir + cache_bytes 启用，
+	// 避免在 Storage.LocalPreviewDir 同目录下乱建子目录。
 }
 
 func isLegacyDefaultVideoExtensions(exts []string) bool {

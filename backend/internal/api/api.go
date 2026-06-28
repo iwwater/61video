@@ -71,6 +71,9 @@ type Server struct {
 	// 删除库中记录 + 本地封面/预览，保留网盘源文件，并写黑名单墓碑
 	// （扫盘不再入库）。未注入时回退为旧的 hidden 标记。
 	OnHideVideo func(ctx context.Context, videoID string) error
+	// OnDetailAccess 详情页请求进入时回调。OnDemand 预览模式下，
+	// App 用它把 pending 预览视频按需入队。未注入时是 no-op。
+	OnDetailAccess func(ctx context.Context, video *catalog.Video)
 
 	tagCacheMu    sync.Mutex
 	tagCacheUntil time.Time
@@ -571,6 +574,12 @@ func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	// OnDemand 预览模式：详情页被访问时再把 pending 预览入队。回调
+	// 自身判断 status/drive 是否需要排队，未注入时是 no-op。放在驱动校验
+	// 之后、Related 计算之前：避免对找不到盘的视频触发 worker 入队。
+	if s.OnDetailAccess != nil {
+		s.OnDetailAccess(r.Context(), v)
 	}
 	related := s.pickRelatedVideos(r.Context(), v, 6)
 	dto := mapVideo(v)

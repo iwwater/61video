@@ -63,9 +63,6 @@ type Crawler struct {
 }
 
 func NewCrawler(cfg CrawlerConfig) *Crawler {
-	if strings.TrimSpace(cfg.PythonPath) == "" {
-		cfg.PythonPath = "python3"
-	}
 	if strings.TrimSpace(cfg.FFmpegPath) == "" {
 		cfg.FFmpegPath = "ffmpeg"
 	}
@@ -505,7 +502,11 @@ func (c *Crawler) writeJobFile(path, runID string, targetNew, candidateBudget in
 }
 
 func (c *Crawler) startScript(ctx context.Context, jobPath string, targetNew, candidateBudget int) (*exec.Cmd, io.ReadCloser, error) {
-	cmd := exec.CommandContext(ctx, c.cfg.PythonPath, c.cfg.ScriptPath, "--job", jobPath)
+	command, args, err := resolveScriptCommand(c.cfg.PythonPath, c.cfg.ScriptPath, "--job", jobPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
 	if strings.TrimSpace(c.cfg.WorkDir) != "" {
 		cmd.Dir = c.cfg.WorkDir
 	}
@@ -528,7 +529,7 @@ func (c *Crawler) startScript(ctx context.Context, jobPath string, targetNew, ca
 		_ = stdout.Close()
 		return nil, nil, err
 	}
-	log.Printf("[scriptcrawler] drive=%s exec %s --job=%s unique_target=%d candidate_budget=%d", c.cfg.Driver.ID(), c.cfg.ScriptPath, jobPath, targetNew, candidateBudget)
+	log.Printf("[scriptcrawler] drive=%s exec %s %s unique_target=%d candidate_budget=%d", c.cfg.Driver.ID(), command, strings.Join(args, " "), targetNew, candidateBudget)
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()

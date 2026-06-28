@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -99,11 +100,7 @@ func TestTinyVideoPreviewPlanUsesWholeVideoAsSingleSegment(t *testing.T) {
 
 func TestProbeIgnoresStderrWarnings(t *testing.T) {
 	dir := t.TempDir()
-	ffprobePath := filepath.Join(dir, "ffprobe")
-	script := "#!/bin/sh\nprintf '%s\\n' 'h264 warning' >&2\nprintf '%s\\n' '364.800000'\n"
-	if err := os.WriteFile(ffprobePath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write ffprobe stub: %v", err)
-	}
+	ffprobePath := writePreviewExecutable(t, dir, "ffprobe", "printf '%s\\n' 'h264 warning' >&2\nprintf '%s\\n' '364.800000'\n", "echo h264 warning 1>&2\r\necho 364.800000\r\n")
 
 	gen := New(Config{FFprobePath: ffprobePath})
 	got, err := gen.Probe(context.Background(), &drives.StreamLink{URL: filepath.Join(dir, "video.mp4")})
@@ -270,4 +267,19 @@ func TestShouldProxy115FFmpegLinks(t *testing.T) {
 	if shouldProxyFFmpegLink(&drives.StreamLink{URL: "https://download.example/file.mp4"}) {
 		t.Fatal("generic link should not use local ffmpeg proxy")
 	}
+}
+
+func writePreviewExecutable(t *testing.T, dir, baseName, unixBody, windowsBody string) string {
+	t.Helper()
+	ext := ".sh"
+	body := "#!/bin/sh\n" + unixBody
+	if runtime.GOOS == "windows" {
+		ext = ".cmd"
+		body = "@echo off\r\n" + windowsBody
+	}
+	path := filepath.Join(dir, baseName+ext)
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write preview helper: %v", err)
+	}
+	return path
 }

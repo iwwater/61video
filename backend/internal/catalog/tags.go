@@ -67,7 +67,20 @@ func (c *Catalog) migrate(ctx context.Context) error {
 	if err := c.addColumnIfMissing(ctx, "videos", "thumbnail_failures", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	// 2026-06-27 加：失败原因写进 DB，admin 后台 / 诊断脚本能直接读到上游错误，
+	// 不必 grep log。截断到 500 字符避免占太多空间。
+	if err := c.addColumnIfMissing(ctx, "videos", "thumbnail_error", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := c.addColumnIfMissing(ctx, "videos", "last_viewed_at", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	// 2026-06-27 加：预览视频失败原因 + 失败计数。失败时把上游 err 截断到 500 字符
+	// 写进 DB，admin / 诊断脚本能直接读出来，不必再 grep 后端 log。
+	if err := c.addColumnIfMissing(ctx, "videos", "preview_error", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := c.addColumnIfMissing(ctx, "videos", "preview_failures", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
 	// 观看进度：客户端每 5s 上报 currentTime。progress_at 用于"继续观看"排序。
@@ -165,6 +178,13 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_file_name_size_created ON videos(file_name, size_bytes, created_at, id)`); err != nil {
 		return err
 	}
+	// 2026-06-27 加：(drive_id, file_name, size_bytes) 用于扫描器按盘 + 文件名 +
+	// size 找重复视频，并发场景下也避免不同盘同名同 size 误判。原 idx_videos_file_name_size
+	// 保留是因为 IsDeletedVideoCandidate 的 tombstone 查询也用到了 (file_name, size)；
+	// 这里新索引针对性补全带 drive_id 前缀的场景。
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_file_name_size ON videos(drive_id, file_name, size_bytes)`); err != nil {
+		return err
+	}
 	// 2026-06 Opt-A 补齐的复合/部分索引（schema.sql 不放是因为旧库先跑
 	// schema.sql 再 addColumnIfMissing——在 schema.sql 里 CREATE INDEX 引用
 	// 还没加的列会直接 SQL error）。这里 migrate() 已在所有 addColumnIfMissing
@@ -173,6 +193,16 @@ CREATE TABLE IF NOT EXISTS deleted_videos (
 		return err
 	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_preview ON videos(drive_id, preview_status)`); err != nil {
+		return err
+	}
+	// 2026-06-27 加：组合索引直接覆盖「按盘查 + 按 published_at DESC」和
+	// 「按盘 + 按 media_type + 按 published_at DESC」。后者是音频/视频分流
+	// listing 的 hot path：前端默认按 media_type 过滤。已有 (drive_id,
+	// file_id) 在「按 file_id 查重」有用，但 listing 不命中它。
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_pub ON videos(drive_id, published_at DESC)`); err != nil {
+		return err
+	}
+	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_media_pub ON videos(drive_id, media_type, published_at DESC)`); err != nil {
 		return err
 	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_drive_fingerprint ON videos(drive_id, fingerprint_status)`); err != nil {

@@ -47,6 +47,28 @@
 
 ## 快速开始
 
+### Windows 私有远程访问（Tailscale）
+
+如果你是像我一样只给自己的电脑和手机用，推荐：
+
+- 默认本机模式：`61-start.exe --mode local-only`
+- 私有远程模式：`61-start.exe --mode private-remote`
+- 一键 Tailscale 辅助脚本：`powershell -ExecutionPolicy Bypass -File .\scripts\start-91-tailscale.ps1`
+
+说明：
+
+- `local-only` 只绑定 `127.0.0.1`，适合只在当前电脑打开。
+- `private-remote` 会把前端绑定到 `0.0.0.0`，方便你通过 Tailscale 或局域网访问。
+- 后端仍保持 `127.0.0.1:6192`，由前端预览服务器反代 `/api`、`/p`、`/admin/api`，比直接暴露 API 更安全。
+- 本项目仍然是登录后访问的私有站，不提供游客模式，不建议公网端口直出。
+
+启动器成功后会打印：
+
+- 本机地址
+- 局域网地址（仅 `private-remote`）
+- Tailscale 地址（如果已连接）
+- 当前模式、日志目录、登录保护状态
+
 ### 方式一：一键安装脚本（推荐）
 
 ```bash

@@ -67,6 +67,44 @@ func TestLoadDefaultScannerVideoExtensionsIncludeSTRM(t *testing.T) {
 	}
 }
 
+func TestLoadPreviewOnDemandAndDriveCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+preview:
+  on_demand: true
+  drive_cap: 50
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.Preview.OnDemand {
+		t.Fatalf("Preview.OnDemand = false, want true")
+	}
+	if cfg.Preview.DriveCap != 50 {
+		t.Fatalf("Preview.DriveCap = %d, want 50", cfg.Preview.DriveCap)
+	}
+}
+
+func TestLoadPreviewDefaultsToBulkMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Preview.OnDemand {
+		t.Fatalf("Preview.OnDemand = true, want false (default behavior preserved)")
+	}
+	if cfg.Preview.DriveCap != 0 {
+		t.Fatalf("Preview.DriveCap = %d, want 0 (default = no cap)", cfg.Preview.DriveCap)
+	}
+}
+
 func TestLoadLegacyDefaultScannerVideoExtensionsIncludeSTRM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

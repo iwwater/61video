@@ -65,6 +65,10 @@ func Open(path string) (*Catalog, error) {
 
 func (c *Catalog) Close() error { return c.db.Close() }
 
+// DB 返回底层 *sql.DB，仅供 cmd/ 下的诊断脚本使用。生产代码路径走
+// Catalog 自身的封装方法，不要直接拼 SQL 绕过事务 / 校验。
+func (c *Catalog) DB() *sql.DB { return c.db }
+
 // InitSystemTags 从 settings 表加载 system 标签集合到内存；main 启动时调一次。
 func (c *Catalog) InitSystemTags(ctx context.Context) error {
 	if c.systemTags == nil {
@@ -128,9 +132,14 @@ type Video struct {
 	MediaType         string   `json:"mediaType"`
 	Quality           string   `json:"quality"`
 	ThumbnailURL      string   `json:"thumbnailUrl"`
+	ThumbnailError    string   `json:"thumbnailError"`
 	PreviewFileID     string   `json:"previewFileId"`
 	PreviewLocal      string   `json:"previewLocal"`
 	PreviewStatus     string   `json:"previewStatus"`
+	PreviewError      string   `json:"previewError"`
+	// PreviewFailures 是 preview 连续失败计数；和 thumbnail_failures 平行。
+	// 用作 transient 退避触发条件：达到阈值时 worker 整盘暂停一段时间再重试。
+	PreviewFailures   int      `json:"previewFailures"`
 	// TranscodeStatus：浏览器兼容性转码状态。
 	// ''=未检测 / pending=已入队 / ready=已转码 / skipped=无需转码 / failed=失败。
 	TranscodeStatus  string    `json:"transcodeStatus"`
@@ -174,14 +183,14 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	_, err := c.db.ExecContext(ctx, `
 INSERT INTO videos (
   id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, title, author, tags,
-  duration_seconds, size_bytes, ext, media_type, quality, thumbnail_url, thumbnail_status,
-  preview_file_id, preview_local, preview_status,
+  duration_seconds, size_bytes, ext, media_type, quality, thumbnail_url, thumbnail_status, thumbnail_error,
+  preview_file_id, preview_local, preview_status, preview_error, preview_failures,
   views, last_viewed_at, favorites, comments, likes, dislikes,
   category, hidden, badges, description, published_at, created_at, updated_at
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
-  ?, ?, ?,
+  ?, ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END, ?,
+  ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?
 )
@@ -226,14 +235,17 @@ ON CONFLICT(id) DO UPDATE SET
                       WHEN COALESCE(excluded.thumbnail_url, '') != '' THEN 'ready'
                       ELSE videos.thumbnail_status
                     END,
+  thumbnail_error = excluded.thumbnail_error,
+  preview_error   = excluded.preview_error,
+  preview_failures= excluded.preview_failures,
   category        = excluded.category,
   badges          = excluded.badges,
   description     = excluded.description,
   updated_at      = excluded.updated_at
 `,
 		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, v.Title, v.Author, string(tagsJSON),
-		v.DurationSeconds, v.Size, v.Ext, v.MediaType, v.Quality, v.ThumbnailURL, v.ThumbnailURL,
-		v.PreviewFileID, v.PreviewLocal, nullableStatus(v.PreviewStatus),
+		v.DurationSeconds, v.Size, v.Ext, v.MediaType, v.Quality, v.ThumbnailURL, v.ThumbnailURL, v.ThumbnailError,
+		v.PreviewFileID, v.PreviewLocal, nullableStatus(v.PreviewStatus), v.PreviewError, v.PreviewFailures,
 		v.Views, unixMilliOrZero(v.LastViewedAt), v.Favorites, v.Comments, v.Likes, v.Dislikes,
 		v.Category, boolToInt(v.Hidden), string(badgesJSON), v.Description,
 		v.PublishedAt.UnixMilli(), v.CreatedAt.UnixMilli(), v.UpdatedAt.UnixMilli(),
@@ -579,6 +591,9 @@ type VideoMetaPatch struct {
 	Category               string
 	ContentHash            string
 	FileName               string
+	// Size 是文件字节数；>0 时写入 videos.size_bytes。
+	// 增量扫会更新 Size（网盘上文件被覆盖 → size 变了），原代码漏了这个字段。
+	Size int64
 	Title                  string
 	TitleSet               bool
 	Author                 string
@@ -632,6 +647,10 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 	if p.FileName != "" {
 		parts = append(parts, "file_name = ?")
 		args = append(args, p.FileName)
+	}
+	if p.Size > 0 {
+		parts = append(parts, "size_bytes = ?")
+		args = append(args, p.Size)
 	}
 	if p.TitleSet {
 		parts = append(parts, "title = ?")
@@ -696,6 +715,66 @@ func (c *Catalog) IncrementThumbnailFailures(ctx context.Context, id string) (in
 		return 0, err
 	}
 	return failures, nil
+}
+
+// RecordThumbnailError 写失败状态 + 上游错误信息（截断 500 字符避免爆行）。
+// 与 IncrementThumbnailFailures 不同：本方法把 thumbnail_status 设为 'failed'
+// 并清空 url（如果有），让 admin 能直接看到原因；IncrementThumbnailFailures
+// 仅累加 transient 失败计数，不动 status（用于 rate-limit 期间的退避）。
+func (c *Catalog) RecordThumbnailError(ctx context.Context, id, errMsg string) error {
+	_, err := c.db.ExecContext(ctx,
+		`UPDATE videos
+		    SET thumbnail_status = 'failed',
+		        thumbnail_url = '',
+		        thumbnail_error = ?,
+		        updated_at = ?
+		  WHERE id = ?`,
+		truncateErrMsg(errMsg), time.Now().UnixMilli(), id)
+	return err
+}
+
+// ClearThumbnailError 封面重新生成成功后清空 error 字段。
+func (c *Catalog) ClearThumbnailError(ctx context.Context, id string) error {
+	_, err := c.db.ExecContext(ctx,
+		`UPDATE videos SET thumbnail_error = '', updated_at = ? WHERE id = ?`,
+		time.Now().UnixMilli(), id)
+	return err
+}
+
+// RecordPreviewError 写预览失败状态 + 上游错误信息。
+func (c *Catalog) RecordPreviewError(ctx context.Context, id, errMsg string) error {
+	_, err := c.db.ExecContext(ctx,
+		`UPDATE videos
+		    SET preview_status = 'failed',
+		        preview_local = '',
+		        preview_error = ?,
+		        preview_failures = COALESCE(preview_failures, 0) + 1,
+		        updated_at = ?
+		  WHERE id = ?`,
+		truncateErrMsg(errMsg), time.Now().UnixMilli(), id)
+	return err
+}
+
+// ClearPreviewError 预览重新生成成功后清空 error 字段。
+func (c *Catalog) ClearPreviewError(ctx context.Context, id string) error {
+	_, err := c.db.ExecContext(ctx,
+		`UPDATE videos
+		    SET preview_error = '',
+		        preview_failures = 0,
+		        updated_at = ?
+		  WHERE id = ?`,
+		time.Now().UnixMilli(), id)
+	return err
+}
+
+// truncateErrMsg 截断错误信息到 500 字符，保留尾部（通常 tail 包含具体原因）。
+const maxErrMsgLen = 500
+
+func truncateErrMsg(s string) string {
+	if len(s) <= maxErrMsgLen {
+		return s
+	}
+	return "…" + s[len(s)-maxErrMsgLen+1:]
 }
 
 // ListCategories 聚合所有 category，按视频数降序
@@ -778,6 +857,51 @@ func (c *Catalog) ListVideosByPreviewStatus(ctx context.Context, driveID, status
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// ListReadyPreviewsByDrive 返回某 drive 下已生成预览的视频（preview_status='ready'
+// 且 preview_local 非空），按 updated_at 升序（最久未更新的在前）。
+//
+// 用途：DriveCap LRU 清理——定期扫这条 list，保留 cap 个最近更新的，
+// 把其余的 preview_local 文件删除并把 status 重置为 "pending"，下次访问再生成。
+//
+// updated_at 而不是 created_at：因为 preview 重新生成会更新这个字段，
+// 最近访问 / 重新生成的视频更"热"，要保留。
+func (c *Catalog) ListReadyPreviewsByDrive(ctx context.Context, driveID string, limit int) ([]*Video, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT `+allVideoCols+` FROM videos
+		 WHERE drive_id = ? AND preview_status = 'ready'
+		   AND COALESCE(preview_local, '') != ''
+		   AND COALESCE(hidden, 0) = 0
+		   AND `+uniqueVideoWhereSQL+`
+		 ORDER BY updated_at ASC LIMIT ?`,
+		driveID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// ResetPreviewLocal 把视频的预览本地路径清空、状态回退到 pending（不删文件）。
+// cleanup goroutine 在删完文件后调用本方法，把 DB 状态与磁盘同步。
+// 后续用户访问该视频会重新触发预览生成。
+func (c *Catalog) ResetPreviewLocal(ctx context.Context, videoID string) error {
+	_, err := c.db.ExecContext(ctx,
+		`UPDATE videos SET preview_local = '', preview_status = 'pending', updated_at = ? WHERE id = ?`,
+		time.Now().UnixMilli(), videoID)
+	return err
 }
 
 // ListVideosByThumbnailStatus 按封面（thumbnail）状态列出某 drive 下的视频。
@@ -1301,16 +1425,20 @@ func (c *Catalog) FindVideoByContentHash(ctx context.Context, hash string) (*Vid
 	return scanVideo(row)
 }
 
-func (c *Catalog) FindVideoByFileSignature(ctx context.Context, fileName string, size int64) (*Video, error) {
+func (c *Catalog) FindVideoByFileSignature(ctx context.Context, driveID, fileName string, size int64) (*Video, error) {
 	if fileName == "" || size <= 0 {
 		return nil, sql.ErrNoRows
 	}
+	// 2026-06-27 加 drive_id：scanner 在并发模式下可能在不同盘看到同名同 size
+	// 的文件；不加 drive_id 会把"不同盘的不同文件"误判为重复，导致其中一盘
+	// 的视频根本没被入库。把判定范围收紧到同一盘是正确语义——同一盘里同名同
+	// size 一般是同源备份 / 用户自己复制粘贴。
 	row := c.db.QueryRowContext(ctx,
 		`SELECT `+allVideoCols+`
 		 FROM videos
-		 WHERE file_name = ? AND size_bytes = ?
+		 WHERE drive_id = ? AND file_name = ? AND size_bytes = ?
 		 ORDER BY created_at ASC, id ASC
-		 LIMIT 1`, fileName, size)
+		 LIMIT 1`, driveID, fileName, size)
 	return scanVideo(row)
 }
 
@@ -2364,8 +2492,10 @@ const allVideoCols = `
 id, drive_id, file_id, COALESCE(file_name, ''), COALESCE(content_hash, ''),
 COALESCE(sampled_sha256, ''), COALESCE(fingerprint_status, 'pending'), COALESCE(fingerprint_error, ''),
 COALESCE(parent_id, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
-duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(media_type, 'video'), COALESCE(quality, ''), COALESCE(thumbnail_url, ''),
+duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(media_type, 'video'), COALESCE(quality, ''),
+COALESCE(thumbnail_url, ''), COALESCE(thumbnail_error, ''),
 COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_status, 'pending'),
+COALESCE(preview_error, ''), COALESCE(preview_failures, 0),
 COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
 views, COALESCE(last_viewed_at, 0), COALESCE(progress_seconds, 0), COALESCE(progress_at, 0), favorites, comments, likes, dislikes,
 COALESCE(category, ''), COALESCE(hidden, 0), COALESCE(badges, '[]'), COALESCE(description, ''),
@@ -2436,8 +2566,10 @@ func scanVideo(row rowScanner) (*Video, error) {
 		&v.ID, &v.DriveID, &v.FileID, &v.FileName, &v.ContentHash,
 		&v.SampledSHA256, &v.FingerprintStatus, &v.FingerprintError,
 		&v.ParentID, &v.Title, &v.Author, &tagsJSON,
-		&v.DurationSeconds, &v.Size, &v.Ext, &v.MediaType, &v.Quality, &v.ThumbnailURL,
+		&v.DurationSeconds, &v.Size, &v.Ext, &v.MediaType, &v.Quality,
+		&v.ThumbnailURL, &v.ThumbnailError,
 		&v.PreviewFileID, &v.PreviewLocal, &v.PreviewStatus,
+		&v.PreviewError, &v.PreviewFailures,
 		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
 		&v.Views, &lastViewedAt, &v.ProgressSeconds, &progressAt, &v.Favorites, &v.Comments, &v.Likes, &v.Dislikes,
 		&v.Category, &hidden, &badgesJSON, &v.Description,

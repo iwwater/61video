@@ -151,6 +151,128 @@ func TestServeStreamPikPakSetsRedirectHeaders(t *testing.T) {
 	}
 }
 
+func TestParseRangeHandlesSingleRange(t *testing.T) {
+	cases := []struct {
+		in    string
+		start int64
+		end   int64
+		ok    bool
+	}{
+		{"bytes=0-1023", 0, 1023, true},
+		{"bytes=100-", 100, -1, true},
+		{"bytes=0-99,200-299", 0, 99, true}, // multi-range → first only
+		{"bytes=-500", 0, 0, false},        // suffix not supported
+		{"junk", 0, 0, false},
+		{"", 0, 0, false},
+	}
+	for _, c := range cases {
+		s, e, ok := parseRange(c.in)
+		if ok != c.ok || s != c.start || e != c.end {
+			t.Errorf("parseRange(%q) = (%d, %d, %v), want (%d, %d, %v)",
+				c.in, s, e, ok, c.start, c.end, c.ok)
+		}
+	}
+}
+
+func TestDiskRangeCachePrepareCommitDiscard(t *testing.T) {
+	dir := t.TempDir()
+	c, err := newDiskRangeCache(dir, 1<<20) // 1MB cap
+	if err != nil {
+		t.Fatalf("newDiskRangeCache: %v", err)
+	}
+
+	// prepare → write → commit → entryPath 应存在
+	partial, err := c.prepareEntry("drive-1|file-A", 0, 99)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if err := os.WriteFile(partial, []byte("0123456789"), 0o644); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+	c.commitEntry(partial)
+
+	finalPath := c.entryPath("drive-1|file-A", 0, 99)
+	if _, err := os.Stat(finalPath); err != nil {
+		t.Fatalf("commit entry missing: %v", err)
+	}
+	if c.size != 10 {
+		t.Fatalf("cache size = %d, want 10", c.size)
+	}
+
+	// 不同 (start, end) 是不同 entry
+	partial2, err := c.prepareEntry("drive-1|file-A", 100, 199)
+	if err != nil {
+		t.Fatalf("prepare2: %v", err)
+	}
+	if err := os.WriteFile(partial2, []byte("abcdefghij"), 0o644); err != nil {
+		t.Fatalf("write partial2: %v", err)
+	}
+	c.commitEntry(partial2)
+	if c.size != 20 {
+		t.Fatalf("after second commit size = %d, want 20", c.size)
+	}
+
+	// discard → 文件应不存在
+	partial3, err := c.prepareEntry("drive-1|file-B", 0, 9)
+	if err != nil {
+		t.Fatalf("prepare3: %v", err)
+	}
+	if err := os.WriteFile(partial3, []byte("xxxxx"), 0o644); err != nil {
+		t.Fatalf("write partial3: %v", err)
+	}
+	c.discardEntry(partial3)
+	if _, err := os.Stat(partial3); !os.IsNotExist(err) {
+		t.Fatalf("discarded partial still exists: %v", err)
+	}
+}
+
+func TestDiskRangeCacheEvictionByMtime(t *testing.T) {
+	dir := t.TempDir()
+	// 100B cap 让第二个 entry 立即触发淘汰
+	c, err := newDiskRangeCache(dir, 100)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		partial, err := c.prepareEntry("drive-1|file-"+string(rune('A'+i)), 0, 99)
+		if err != nil {
+			t.Fatalf("prepare %d: %v", i, err)
+		}
+		if err := os.WriteFile(partial, make([]byte, 50), 0o644); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+		c.commitEntry(partial)
+	}
+
+	if c.size > 100 {
+		t.Fatalf("size after eviction = %d, want ≤ 100", c.size)
+	}
+	if len(c.entries) > 1 {
+		t.Fatalf("entries after eviction = %d, want ≤ 1 (oldest evicted)", len(c.entries))
+	}
+}
+
+func TestDiskRangeCacheRebuildsSizeFromDisk(t *testing.T) {
+	dir := t.TempDir()
+	for i, name := range []string{"a.bin", "b.bin"} {
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, 100+i*50), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	c, err := newDiskRangeCache(dir, 1<<20)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if c.size != 100+150 {
+		t.Fatalf("rebuild size = %d, want 250", c.size)
+	}
+	if len(c.entries) != 2 {
+		t.Fatalf("rebuild entries = %d, want 2", len(c.entries))
+	}
+}
+
 func TestServeStreamRedirectsOneDrive(t *testing.T) {
 	reg := NewRegistry()
 	drv := &proxyFakeSimpleDrive{

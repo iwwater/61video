@@ -17,7 +17,7 @@ if (-not $tailscale) {
 }
 
 Write-Host "Starting local 61 site..."
-$launcherProcess = Start-Process -FilePath $launcher -PassThru
+$launcherProcess = Start-Process -FilePath $launcher -ArgumentList "--mode", "private-remote" -PassThru
 
 function Wait-Port {
     param(

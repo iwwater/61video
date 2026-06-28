@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -182,9 +183,7 @@ func TestStreamURLRejectsSTRMTargetEscapingRootThroughSymlink(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "real"), 0o755); err != nil {
 		t.Fatalf("mkdir real: %v", err)
 	}
-	if err := os.Symlink(outside, filepath.Join(root, "real", "outside")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	mustCreateLocalStorageSymlink(t, outside, filepath.Join(root, "real", "outside"))
 	writeLocalStorageTestFile(t, filepath.Join(root, "links", "movie.strm"), []byte("../real/outside/secret.mp4\n"))
 	drv := New(Config{ID: "local", RootPath: root})
 
@@ -239,9 +238,7 @@ func TestStreamURLRejectsSymlinkFileIDEscapingRoot(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	writeLocalStorageTestFile(t, filepath.Join(outside, "secret.mp4"), []byte("secret"))
-	if err := os.Symlink(filepath.Join(outside, "secret.mp4"), filepath.Join(root, "link.mp4")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	mustCreateLocalStorageSymlink(t, filepath.Join(outside, "secret.mp4"), filepath.Join(root, "link.mp4"))
 	drv := New(Config{ID: "local", RootPath: root})
 
 	_, err := drv.StreamURL(context.Background(), encodeRel("link.mp4"))
@@ -288,8 +285,12 @@ func TestPathForIDAllowsRootPathSlash(t *testing.T) {
 	if rel != "tmp" {
 		t.Fatalf("rel = %q, want tmp", rel)
 	}
-	if path != filepath.Join(string(os.PathSeparator), "tmp") {
-		t.Fatalf("path = %q, want /tmp", path)
+	want, err := filepath.Abs(filepath.Join(string(os.PathSeparator), "tmp"))
+	if err != nil {
+		t.Fatalf("abs want: %v", err)
+	}
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
 	}
 }
 
@@ -375,5 +376,15 @@ func writeLocalStorageTestFile(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func mustCreateLocalStorageSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" && strings.Contains(strings.ToLower(err.Error()), "privilege") {
+			t.Skipf("symlink requires elevated privilege on this Windows machine: %v", err)
+		}
+		t.Fatalf("symlink: %v", err)
 	}
 }

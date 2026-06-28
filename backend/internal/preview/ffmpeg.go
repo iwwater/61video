@@ -1000,6 +1000,11 @@ type Worker struct {
 	RateLimitCooldown time.Duration
 	rateLimit         rateLimitState
 	activity          taskActivity
+
+	// OnCompleted 在单条预览视频成功生成（preview_status 写入 "ready"）
+	// 后调用。回调拿 videoID 和本地路径；常用于触发 DriveCap LRU 清理。
+	// 未注入时是 no-op。
+	OnCompleted func(videoID, localPath string)
 }
 
 func NewWorker(gen TeaserGenerator, cat *catalog.Catalog, drv drives.Drive) *Worker {
@@ -1562,6 +1567,7 @@ func (w *ThumbWorker) process(ctx context.Context, v *catalog.Video) bool {
 	v = loaded
 	if loaded.ThumbnailURL != "" && loaded.DurationSeconds > 0 {
 		_ = w.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{ThumbnailStatus: "ready"})
+		_ = w.Catalog.ClearThumbnailError(ctx, v.ID)
 		return false
 	}
 	if current.ThumbnailURL != "" {
@@ -1586,12 +1592,13 @@ func (w *ThumbWorker) process(ctx context.Context, v *catalog.Video) bool {
 			return false
 		}
 		_ = w.Catalog.UpdateVideoMeta(ctx, current.ID, catalog.VideoMetaPatch{ThumbnailStatus: "ready"})
+		_ = w.Catalog.ClearThumbnailError(ctx, current.ID)
 		return false
 	}
 	_ = w.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{ThumbnailStatus: "pending"})
 	if isSpider91OriginVideo(v) {
 		log.Printf("[thumb] skip %s: spider91-origin video must use crawled thumbnail", v.Title)
-		_ = w.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{ThumbnailStatus: "failed"})
+		_ = w.Catalog.RecordThumbnailError(ctx, v.ID, "spider91-origin video must use crawled thumbnail")
 		return false
 	}
 	link, err := w.streamLink(ctx, v)
@@ -1600,7 +1607,7 @@ func (w *ThumbWorker) process(ctx context.Context, v *catalog.Video) bool {
 			return true
 		}
 		log.Printf("[thumb] streamURL %s: %v", v.Title, err)
-		_ = w.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{ThumbnailStatus: "failed"})
+		_ = w.Catalog.RecordThumbnailError(ctx, v.ID, "streamURL: "+err.Error())
 		return false
 	}
 	if w.probeDuration(ctx, v, link) {
@@ -1613,6 +1620,7 @@ func (w *ThumbWorker) process(ctx context.Context, v *catalog.Video) bool {
 				return true
 			}
 			if localErr := w.generateThumbnailFromLink(ctx, v, localLink); localErr == nil {
+				_ = w.Catalog.ClearThumbnailError(ctx, v.ID)
 				return false
 			}
 		}
@@ -1620,9 +1628,10 @@ func (w *ThumbWorker) process(ctx context.Context, v *catalog.Video) bool {
 			return true
 		}
 		log.Printf("[thumb] generate %s: %v", v.Title, err)
-		_ = w.Catalog.UpdateVideoMeta(ctx, v.ID, catalog.VideoMetaPatch{ThumbnailStatus: "failed"})
+		_ = w.Catalog.RecordThumbnailError(ctx, v.ID, "generate: "+err.Error())
 		return false
 	}
+	_ = w.Catalog.ClearThumbnailError(ctx, v.ID)
 	return false
 }
 
@@ -1701,7 +1710,7 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) {
 			return
 		}
 		log.Printf("[preview] streamURL %s: %v", v.Title, err)
-		w.Catalog.UpdatePreview(ctx, v.ID, "", "failed")
+		_ = w.Catalog.RecordPreviewError(ctx, v.ID, "streamURL: "+err.Error())
 		return
 	}
 
@@ -1725,23 +1734,28 @@ func (w *Worker) process(ctx context.Context, v *catalog.Video) {
 			return
 		}
 		log.Printf("[preview] generate %s: %v", v.Title, err)
-		w.Catalog.UpdatePreview(ctx, v.ID, "", "failed")
+		_ = w.Catalog.RecordPreviewError(ctx, v.ID, "generate: "+err.Error())
 		return
 	}
 	local, err := w.Gen.MoveToLocal(tmp, v.ID)
 	if err != nil {
 		log.Printf("[preview] move %s: %v", v.Title, err)
-		w.Catalog.UpdatePreview(ctx, v.ID, "", "failed")
+		_ = w.Catalog.RecordPreviewError(ctx, v.ID, "move: "+err.Error())
 		return
 	}
 
 	removePreviousLocalTeaser(v.PreviewLocal, local)
 	if err := w.Catalog.UpdatePreview(ctx, v.ID, local, "ready"); err != nil {
 		removePreviousLocalTeaser(local, "")
+		_ = w.Catalog.RecordPreviewError(ctx, v.ID, "update ready: "+err.Error())
 		log.Printf("[preview] update %s after generate: %v", v.Title, err)
 		return
 	}
+	_ = w.Catalog.ClearPreviewError(ctx, v.ID)
 	log.Printf("[preview] ready %s (duration=%.1fs)", v.Title, duration)
+	if w.OnCompleted != nil {
+		w.OnCompleted(v.ID, local)
+	}
 }
 
 func (w *Worker) generateTeaser(ctx context.Context, v *catalog.Video, link *drives.StreamLink, duration float64) (string, error) {

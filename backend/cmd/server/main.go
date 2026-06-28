@@ -64,6 +64,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	if v := strings.TrimSpace(os.Getenv("VIDEO_SITE_SERVER_LISTEN")); v != "" {
+		cfg.Server.Listen = v
+	}
 
 	// bilibili extractor 默认 init 时已经注册了一个空 SESSDATA 的实例。
 	// 这里用 yaml 里的配置覆盖一遍，让登录态 cookie 真正生效。
@@ -99,6 +102,16 @@ func main() {
 		scriptCrawlers:     make(map[string]*scriptcrawler.Crawler),
 	}
 	app.proxy = proxy.New(app.registry)
+	// 网盘代理流字节范围磁盘缓存：把 115/PikPak/夸克等"非 302 网盘"的已下载
+	// range 写到本地，重复请求直接读盘。默认 2GB 上限；目录在 LocalPreviewDir
+	// 旁独立，方便用户清理。容量 0 时退化为无缓存（与旧行为一致）。
+	if cfg.Proxy.CacheDir != "" && cfg.Proxy.CacheBytes > 0 {
+		if err := app.proxy.EnableDiskCache(cfg.Proxy.CacheDir, cfg.Proxy.CacheBytes); err != nil {
+			log.Printf("[proxy] disk cache init failed (continuing without cache): %v", err)
+		} else {
+			log.Printf("[proxy] disk cache enabled: dir=%s cap=%d bytes", cfg.Proxy.CacheDir, cfg.Proxy.CacheBytes)
+		}
+	}
 	app.spider91Migrator = spider91migrate.New(spider91migrate.Config{
 		Catalog:          cat,
 		Registry:         app.registry,
@@ -154,6 +167,11 @@ func main() {
 		OnHideVideo: func(reqCtx context.Context, videoID string) error {
 			_, err := app.deleteVideo(reqCtx, videoID, false)
 			return err
+		},
+		// OnDemand 预览模式：详情页被访问时把 pending 预览入队。
+		// OnDemand=false（默认）时回调直接 return，无副作用，行为不变。
+		OnDetailAccess: func(reqCtx context.Context, v *catalog.Video) {
+			app.enqueuePreviewIfPending(reqCtx, v)
 		},
 		GetTheme: func() string { return app.Theme() },
 	}
@@ -449,6 +467,11 @@ type App struct {
 	transcodeMu      sync.Mutex
 	transcodeWorkers map[string]*transcode.Worker
 	transcodeCancels map[string]context.CancelFunc
+
+	// diskCleanupMu 保护 diskCleanupRunning；防止 preview worker 同一盘
+	// 多次完成事件并发触发 DriveCap LRU 清理。
+	diskCleanupMu      sync.Mutex
+	diskCleanupRunning map[string]bool
 }
 
 type driveScanProgress struct {
@@ -1181,7 +1204,76 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 		previewWorker.RateLimitCooldown = cooldown
 		thumbWorker.RateLimitCooldown = cooldown
 	}
+	// DriveCap LRU 清理钩子：每条预览视频成功生成后异步触发 cleanup。
+	// DriveCap=0 时回调是 no-op，不消耗资源。
+	if a.cfg != nil && a.cfg.Preview.DriveCap > 0 && drv != nil {
+		previewWorker.OnCompleted = func(videoID, localPath string) {
+			go a.enforcePreviewDriveCap(drv.ID(), a.cfg.Preview.DriveCap)
+		}
+	}
 	return previewWorker, thumbWorker, fingerprint.NewWorker(a.cat, drv, fingerprintConfigForDrive(drv))
+}
+
+// enforcePreviewDriveCap 异步清理某盘的预览文件，超出 DriveCap 时按
+// updated_at ASC 删除最旧的。删除本地 .mp4 + 把 DB 状态回退为 pending，
+// 下次访问重新生成。
+//
+// 由 preview.Worker.OnCompleted 钩子触发；清理本身是异步 + 串行的：
+//   - 用 diskCleanupMu 防止多个完成事件并发触发清理。
+//   - 每次清理只看该盘 ready 视频的"当前快照"，按 updated_at ASC 排序。
+//     删到 count<=cap 为止；其余 ready 视频保留。
+func (a *App) enforcePreviewDriveCap(driveID string, cap int) {
+	if cap <= 0 || a.cat == nil {
+		return
+	}
+	key := driveID
+	a.diskCleanupMu.Lock()
+	if a.diskCleanupRunning == nil {
+		a.diskCleanupRunning = make(map[string]bool)
+	}
+	if a.diskCleanupRunning[key] {
+		a.diskCleanupMu.Unlock()
+		return
+	}
+	a.diskCleanupRunning[key] = true
+	a.diskCleanupMu.Unlock()
+
+	defer func() {
+		a.diskCleanupMu.Lock()
+		delete(a.diskCleanupRunning, key)
+		a.diskCleanupMu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	ready, err := a.cat.ListReadyPreviewsByDrive(ctx, driveID, 0)
+	if err != nil {
+		log.Printf("[preview-cap] drive=%s list ready: %v", driveID, err)
+		return
+	}
+	excess := len(ready) - cap
+	if excess <= 0 {
+		return
+	}
+	log.Printf("[preview-cap] drive=%s ready=%d cap=%d evict=%d", driveID, len(ready), cap, excess)
+	evicted := 0
+	for i := 0; i < excess; i++ {
+		v := ready[i]
+		if v.PreviewLocal != "" {
+			if err := os.Remove(v.PreviewLocal); err != nil && !os.IsNotExist(err) {
+				log.Printf("[preview-cap] drive=%s remove %s: %v", driveID, v.PreviewLocal, err)
+				continue
+			}
+		}
+		if err := a.cat.ResetPreviewLocal(ctx, v.ID); err != nil {
+			log.Printf("[preview-cap] drive=%s reset %s: %v", driveID, v.ID, err)
+			continue
+		}
+		evicted++
+	}
+	if evicted > 0 {
+		log.Printf("[preview-cap] drive=%s evicted=%d", driveID, evicted)
+	}
 }
 
 func generationCooldownForDrive(drv drives.Drive) time.Duration {
@@ -1886,7 +1978,41 @@ func (a *App) enqueueDriveGeneration(ctx context.Context, driveID string, worker
 	if worker == nil || !a.teaserEnabledForDrive(ctx, driveID) {
 		return
 	}
+	// Preview.OnDemand=true 时跳过批量预览入队：扫盘后只生成缩略图，
+	// 预览视频留到详情页首次访问时由 enqueuePreviewIfPending 按需入队。
+	// OnDemand=false（默认）保持原行为——扫盘完成立刻批量入队。
+	if a.cfg != nil && a.cfg.Preview.OnDemand {
+		return
+	}
 	a.enqueuePending(ctx, driveID, worker)
+}
+
+// enqueuePreviewIfPending 把单条 pending 预览视频入队预览 worker，供
+// OnDemand 模式详情页回调使用。video 是从 catalog 读出的最新状态；
+// PreviewStatus 不是 "pending" 时不入队（避免重复入队或入队 disabled 项）。
+//
+// 音频类型（MediaType=="audio"）的 PreviewStatus 在 scanner 阶段被设为
+// "disabled"，不会进队；这里也再守一遍。
+func (a *App) enqueuePreviewIfPending(ctx context.Context, v *catalog.Video) {
+	if a == nil || v == nil {
+		return
+	}
+	if a.cfg != nil && !a.cfg.Preview.OnDemand {
+		return
+	}
+	if v.PreviewStatus != "pending" {
+		return
+	}
+	if v.MediaType == "audio" {
+		return
+	}
+	a.mu.Lock()
+	worker := a.workers[v.DriveID]
+	a.mu.Unlock()
+	if worker == nil {
+		return
+	}
+	worker.Enqueue(v)
 }
 
 func (a *App) enqueueThumbnails(ctx context.Context, driveID string, w *preview.ThumbWorker) {

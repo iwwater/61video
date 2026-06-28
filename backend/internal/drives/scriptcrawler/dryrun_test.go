@@ -5,31 +5,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-func writeDryRunScript(t *testing.T, body string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "crawler.sh")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	return path
-}
-
 func TestDryRunCollectsFirstItem(t *testing.T) {
-	script := writeDryRunScript(t, `
-echo '[log] fetching list page' >&2
-echo '{"type":"item","item":{"title":"Test Video","media_url":"https://cdn.example.test/v.mp4","source_id":"123","thumbnail_url":"https://cdn.example.test/t.jpg"}}'
-echo '{"type":"done","stats":{"emitted":1}}'
-`)
+	script := writePlatformScript(t, t.TempDir(), "crawler",
+		"echo '[log] fetching list page' >&2\necho '{\"type\":\"item\",\"item\":{\"title\":\"Test Video\",\"media_url\":\"https://cdn.example.test/v.mp4\",\"source_id\":\"123\",\"thumbnail_url\":\"https://cdn.example.test/t.jpg\"}}'\necho '{\"type\":\"done\",\"stats\":{\"emitted\":1}}'\n",
+		"echo [log] fetching list page 1>&2\r\necho {\"type\":\"item\",\"item\":{\"title\":\"Test Video\",\"media_url\":\"https://cdn.example.test/v.mp4\",\"source_id\":\"123\",\"thumbnail_url\":\"https://cdn.example.test/t.jpg\"}}\r\necho {\"type\":\"done\",\"stats\":{\"emitted\":1}}\r\n",
+	)
 	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
 		ScriptPath:     script,
 		SkipMediaProbe: true,
 	})
@@ -49,14 +36,12 @@ echo '{"type":"done","stats":{"emitted":1}}'
 }
 
 func TestDryRunCapturesStderrWhenStoppingAfterFirstItem(t *testing.T) {
-	script := writeDryRunScript(t, `
-echo '[log] first item ready' >&2
-echo '{"type":"item","item":{"title":"Early Stop Video","media_url":"https://cdn.example.test/v.mp4","source_id":"early-stop"}}'
-sleep 30
-`)
+	script := writePlatformScript(t, t.TempDir(), "crawler",
+		"echo '[log] first item ready' >&2\necho '{\"type\":\"item\",\"item\":{\"title\":\"Early Stop Video\",\"media_url\":\"https://cdn.example.test/v.mp4\",\"source_id\":\"early-stop\"}}'\nsleep 30\n",
+		"echo [log] first item ready 1>&2\r\necho {\"type\":\"item\",\"item\":{\"title\":\"Early Stop Video\",\"media_url\":\"https://cdn.example.test/v.mp4\",\"source_id\":\"early-stop\"}}\r\npowershell -NoLogo -NoProfile -Command \"Start-Sleep -Seconds 30\"\r\n",
+	)
 	start := time.Now()
 	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
 		ScriptPath:     script,
 		SkipMediaProbe: true,
 	})
@@ -83,12 +68,11 @@ func TestDryRunProbesMediaURL(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	script := writeDryRunScript(t, fmt.Sprintf(
-		`echo '{"type":"item","title":"Probe Video","media_url":"%s/v.mp4","detail_url":"https://example.test/view"}'`,
-		srv.URL,
-	))
+	script := writePlatformScript(t, t.TempDir(), "crawler",
+		fmt.Sprintf("echo '{\"type\":\"item\",\"title\":\"Probe Video\",\"media_url\":\"%s/v.mp4\",\"detail_url\":\"https://example.test/view\"}'\n", srv.URL),
+		fmt.Sprintf("echo {\"type\":\"item\",\"title\":\"Probe Video\",\"media_url\":\"%s/v.mp4\",\"detail_url\":\"https://example.test/view\"}\r\n", srv.URL),
+	)
 	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath: "/bin/sh",
 		ScriptPath: script,
 	})
 	if !result.OK {
@@ -111,12 +95,11 @@ func TestDryRunReportsBrokenMediaURL(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	script := writeDryRunScript(t, fmt.Sprintf(
-		`echo '{"type":"item","title":"Dead Link","media_url":"%s/v.mp4"}'`,
-		srv.URL,
-	))
+	script := writePlatformScript(t, t.TempDir(), "crawler",
+		fmt.Sprintf("echo '{\"type\":\"item\",\"title\":\"Dead Link\",\"media_url\":\"%s/v.mp4\"}'\n", srv.URL),
+		fmt.Sprintf("echo {\"type\":\"item\",\"title\":\"Dead Link\",\"media_url\":\"%s/v.mp4\"}\r\n", srv.URL),
+	)
 	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath: "/bin/sh",
 		ScriptPath: script,
 	})
 	if result.OK {
@@ -131,9 +114,8 @@ func TestDryRunReportsBrokenMediaURL(t *testing.T) {
 }
 
 func TestDryRunRejectsNonJSONStdout(t *testing.T) {
-	script := writeDryRunScript(t, `echo 'plain text progress output'`)
+	script := writePlatformScript(t, t.TempDir(), "crawler", "echo 'plain text progress output'\n", "echo plain text progress output\r\n")
 	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
 		ScriptPath:     script,
 		SkipMediaProbe: true,
 	})
@@ -146,10 +128,9 @@ func TestDryRunRejectsNonJSONStdout(t *testing.T) {
 }
 
 func TestDryRunTimesOut(t *testing.T) {
-	script := writeDryRunScript(t, `sleep 30`)
+	script := writePlatformScript(t, t.TempDir(), "crawler", "sleep 30\n", "powershell -NoLogo -NoProfile -Command \"Start-Sleep -Seconds 30\"\r\n")
 	start := time.Now()
 	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
 		ScriptPath:     script,
 		Timeout:        2 * time.Second,
 		SkipMediaProbe: true,
@@ -167,7 +148,6 @@ func TestDryRunTimesOut(t *testing.T) {
 
 func TestDryRunMissingScript(t *testing.T) {
 	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath: "/bin/sh",
 		ScriptPath: filepath.Join(t.TempDir(), "missing.py"),
 	})
 	if result.OK || result.Error == "" {

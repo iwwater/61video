@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -110,8 +109,9 @@ func TestStreamURLReturnsLocalPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamURL: %v", err)
 	}
-	if !strings.HasSuffix(link.URL, "videos/abc.mp4") {
-		t.Fatalf("StreamURL.URL = %q, want suffix videos/abc.mp4", link.URL)
+	want := filepath.Join(d.VideosDir(), "abc.mp4")
+	if link.URL != want {
+		t.Fatalf("StreamURL.URL = %q, want %q", link.URL, want)
 	}
 }
 

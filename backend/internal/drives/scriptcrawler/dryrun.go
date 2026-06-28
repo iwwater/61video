@@ -129,10 +129,6 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 		result.Error = fmt.Sprintf("脚本不存在: %v", err)
 		return result
 	}
-	pythonPath := strings.TrimSpace(cfg.PythonPath)
-	if pythonPath == "" {
-		pythonPath = "python3"
-	}
 	maxItems := cfg.MaxItems
 	if maxItems <= 0 {
 		maxItems = 1
@@ -193,7 +189,12 @@ func DryRun(ctx context.Context, cfg DryRunConfig) *DryRunResult {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, pythonPath, scriptPath, "--job", jobPath)
+	command, args, err := resolveScriptCommand(cfg.PythonPath, scriptPath, "--job", jobPath)
+	if err != nil {
+		result.Error = fmt.Sprintf("启动脚本失败: %v", err)
+		return result
+	}
+	cmd := exec.CommandContext(runCtx, command, args...)
 	cmd.Dir = filepath.Dir(scriptPath)
 	configureDryRunCommand(cmd)
 	cmd.Cancel = func() error {

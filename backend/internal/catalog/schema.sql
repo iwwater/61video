@@ -52,8 +52,11 @@ CREATE INDEX IF NOT EXISTS idx_videos_views ON videos(views DESC);
 -- 2026-06 Opt-A 补充索引见 catalog.migrate()：
 --   放到 migrate() 而不是 schema.sql 是因为这些索引依赖后加的列
 --   (thumbnail_status / preview_status / fingerprint_status / hidden /
---   content_hash / progress_seconds)，旧库先跑 schema.sql 再跑 migrate()
+--   content_hash / progress_seconds / media_type)，旧库先跑 schema.sql 再跑 migrate()
 --   加列——直接在 schema.sql CREATE INDEX 会因列不存在而失败。
+--   2026-06-27 加 idx_videos_drive_pub 和 idx_videos_drive_media_pub
+--   用于加速「按盘 + published_at DESC」和「按盘 + media_type + published_at DESC」
+--   的 listing 查询。
 
 -- 统一标签池
 CREATE TABLE IF NOT EXISTS tags (

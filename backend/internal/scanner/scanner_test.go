@@ -920,6 +920,171 @@ func TestRunDoesNotEnforceLegacyMaxDepth(t *testing.T) {
 	}
 }
 
+// TestRunConcurrentProducesSameStatsAsSerial 验证并发路径与串行路径产出
+// 等价的 stats（Scanned / Added / SeenFileIDs / VisitedDirIDs）。树的形状：
+// root → 4 个子目录 → 每个子目录 2 个文件，并发=4 应在多 worker 间分配。
+func TestRunConcurrentProducesSameStatsAsSerial(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	entries := map[string][]drives.Entry{
+		"root": {
+			{ID: "d1", Name: "D1", IsDir: true},
+			{ID: "d2", Name: "D2", IsDir: true},
+			{ID: "d3", Name: "D3", IsDir: true},
+			{ID: "d4", Name: "D4", IsDir: true},
+		},
+	}
+	for _, dirID := range []string{"d1", "d2", "d3", "d4"} {
+		entries[dirID] = []drives.Entry{
+			{ID: dirID + "-f1", ParentID: dirID, Name: dirID + "-a.mp4", Size: 100},
+			{ID: dirID + "-f2", ParentID: dirID, Name: dirID + "-b.mp4", Size: 200},
+		}
+	}
+	drv := &scannerTreeFakeDrive{entries: entries}
+
+	sc := New(cat, drv, []string{".mp4"}, nil, nil)
+	sc.Concurrency = 4
+
+	stats, err := sc.Run(ctx, "")
+	if err != nil {
+		t.Fatalf("concurrent scan: %v", err)
+	}
+	if stats.Added != 8 {
+		t.Fatalf("concurrent Added = %d, want 8", stats.Added)
+	}
+	if stats.Scanned != 8 {
+		t.Fatalf("concurrent Scanned = %d, want 8", stats.Scanned)
+	}
+	if len(stats.VisitedDirIDs) != 5 {
+		t.Fatalf("concurrent VisitedDirIDs = %d, want 5 (root + 4 subdirs)", len(stats.VisitedDirIDs))
+	}
+	if len(stats.SeenFileIDs) != 8 {
+		t.Fatalf("concurrent SeenFileIDs = %d, want 8", len(stats.SeenFileIDs))
+	}
+	for _, id := range []string{"d1-f1", "d1-f2", "d2-f1", "d2-f2", "d3-f1", "d3-f2", "d4-f1", "d4-f2"} {
+		if _, err := cat.GetVideo(ctx, "fake-drive-"+id); err != nil {
+			t.Fatalf("missing video %s: %v", id, err)
+		}
+	}
+}
+
+// TestRunTreatsSameNameSizeAcrossDrivesAsDistinct 验证扫描器在两个 drive 上
+// 看到同名同 size 的不同文件时，不会把第二个当作重复跳过。
+// 这是 2026-06-27 修的 race 回归：原 findDuplicateByFileSignature 没带 drive_id，
+// 并发扫描不同盘时会把"另一盘的同名文件"误判为重复，导致部分视频不入库。
+func TestRunTreatsSameNameSizeAcrossDrivesAsDistinct(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	// Drive 1：根 → dir-1 → file.mp4 (size=100)
+	// Drive 2：根 → dir-2 → file.mp4 (size=100)
+	// 两个文件在不同 drive 上同名同 size，应该是两条独立记录。
+	drv1 := &scannerTreeFakeDrive{
+		kind: "fake",
+		id:   "drive-1",
+		entries: map[string][]drives.Entry{
+			"root": {{ID: "dir-1", Name: "D1", IsDir: true}},
+			"dir-1": {{ID: "f-1", ParentID: "dir-1", Name: "file.mp4", Size: 100}},
+		},
+	}
+	drv2 := &scannerTreeFakeDrive{
+		kind: "fake",
+		id:   "drive-2",
+		entries: map[string][]drives.Entry{
+			"root": {{ID: "dir-2", Name: "D2", IsDir: true}},
+			"dir-2": {{ID: "f-2", ParentID: "dir-2", Name: "file.mp4", Size: 100}},
+		},
+	}
+
+	for _, drv := range []*scannerTreeFakeDrive{drv1, drv2} {
+		sc := New(cat, drv, []string{".mp4"}, nil, nil)
+		sc.Concurrency = 4
+		stats, err := sc.Run(ctx, "")
+		if err != nil {
+			t.Fatalf("scan drive=%s: %v", drv.id, err)
+		}
+		if stats.Added != 1 {
+			t.Fatalf("drive=%s Added = %d, want 1", drv.id, stats.Added)
+		}
+	}
+	if _, err := cat.GetVideo(ctx, "fake-drive-1-f-1"); err != nil {
+		t.Fatalf("drive-1 file not found: %v", err)
+	}
+	if _, err := cat.GetVideo(ctx, "fake-drive-2-f-2"); err != nil {
+		t.Fatalf("drive-2 file missing — 被误判为重复跳过了: %v", err)
+	}
+}
+
+// TestRunConcurrentRespectsCancellation 验证并发模式在 ctx 取消时退出，
+// 不会泄漏 worker 或死锁。
+func TestRunConcurrentRespectsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cat.Close(); err != nil {
+			t.Fatalf("close catalog: %v", err)
+		}
+	})
+
+	// 100 层嵌套，每层 1 个子目录 + 1 个 mp4。并发=4 启动后立即取消，
+	// 应在 ctx 取消后有限时间内返回。
+	entries := map[string][]drives.Entry{}
+	for i := 0; i < 99; i++ {
+		parent := fmt.Sprintf("d%d", i)
+		child := fmt.Sprintf("d%d", i+1)
+		entries[parent] = []drives.Entry{
+			{ID: child, Name: child, IsDir: true},
+			{ID: parent + "-v", ParentID: parent, Name: "a.mp4", Size: 1},
+		}
+	}
+	entries["d99"] = []drives.Entry{
+		{ID: "d99-v", ParentID: "d99", Name: "a.mp4", Size: 1},
+	}
+	drv := &scannerTreeFakeDrive{entries: entries}
+
+	sc := New(cat, drv, []string{".mp4"}, nil, nil)
+	sc.Concurrency = 4
+
+	doneCh := make(chan error, 1)
+	go func() {
+		_, err := sc.Run(ctx, "")
+		doneCh <- err
+	}()
+
+	// 给 worker 一点时间启动再取消
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-doneCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("scan err = %v, want nil or Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("concurrent scan did not exit within 3s after cancel")
+	}
+}
+
 type scannerFakeDrive struct {
 	entries []drives.Entry
 }
@@ -1056,5 +1221,189 @@ func TestScannerProgressHeartbeatDisabled(t *testing.T) {
 
 	if strings.Contains(buf.String(), "progress:") {
 		t.Fatalf("progress heartbeat should be silenced when interval < 0, got:\n%s", buf.String())
+	}
+}
+
+// TestRunIncrementalSkipsUnchanged 验证增量扫快路径：第二次扫同一个盘时，
+// 无变化的视频都进 Skipped 计数，不动 catalog（不重置 thumbnail_status），
+// 也不触发 ffmpeg 重排。
+func TestRunIncrementalSkipsUnchanged(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { cat.Close() })
+
+	entries := map[string][]drives.Entry{
+		"root": {{ID: "d1", Name: "D1", IsDir: true}},
+		"d1": {
+			{ID: "f-a", ParentID: "d1", Name: "a.mp4", Size: 100},
+			{ID: "f-b", ParentID: "d1", Name: "b.mp4", Size: 200},
+		},
+	}
+	drv := &scannerTreeFakeDrive{entries: entries}
+
+	// 首次扫盘：增量关闭
+	sc1 := New(cat, drv, []string{".mp4"}, nil, nil)
+	stats1, err := sc1.Run(ctx, "")
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if stats1.Added != 2 || stats1.Skipped != 0 {
+		t.Fatalf("first scan: Added=%d Skipped=%d, want 2 0", stats1.Added, stats1.Skipped)
+	}
+
+	// 模拟 thumbnail 已生成的副作用；如果增量扫错误地覆盖了它会触发重排。
+	seedTime := time.Now().UnixMilli()
+	for _, id := range []string{"fake-drive-f-a", "fake-drive-f-b"} {
+		if err := cat.UpdatePreview(ctx, id, "/tmp/fake-"+id+".mp4", "ready"); err != nil {
+			t.Fatalf("update preview: %v", err)
+		}
+	}
+	beforeUpdatedAt := map[string]int64{}
+	for _, id := range []string{"fake-drive-f-a", "fake-drive-f-b"} {
+		v, err := cat.GetVideo(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		beforeUpdatedAt[id] = v.UpdatedAt.UnixMilli()
+	}
+	if beforeUpdatedAt["fake-drive-f-a"] < seedTime {
+		t.Fatalf("seed time not applied: %v", beforeUpdatedAt)
+	}
+
+	// 第二次扫盘：增量开启 + Concurrency=4（也验证快路径在并发模式下工作）
+	sc2 := NewWithOptions(cat, drv, []string{".mp4"}, nil, nil, true)
+	sc2.Concurrency = 4
+	stats2, err := sc2.Run(ctx, "")
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if stats2.Added != 0 {
+		t.Fatalf("incremental Added = %d, want 0 (all unchanged)", stats2.Added)
+	}
+	if stats2.Skipped != 2 {
+		t.Fatalf("incremental Skipped = %d, want 2", stats2.Skipped)
+	}
+	if stats2.Scanned != 0 {
+		t.Fatalf("incremental Scanned = %d, want 0 (fast path bypasses Scanned counter)", stats2.Scanned)
+	}
+	if len(stats2.SeenFileIDs) != 2 {
+		t.Fatalf("incremental SeenFileIDs = %d, want 2", len(stats2.SeenFileIDs))
+	}
+
+	// 关键不变量：preview_status / updated_at 都没被触碰。
+	for id, ts := range beforeUpdatedAt {
+		v, err := cat.GetVideo(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s after incremental: %v", id, err)
+		}
+		if v.PreviewStatus != "ready" {
+			t.Fatalf("%s preview_status = %q, want ready (fast path should not touch row)", id, v.PreviewStatus)
+		}
+		if v.UpdatedAt.UnixMilli() != ts {
+			t.Fatalf("%s updated_at changed: before=%d after=%d (fast path should not touch row)", id, ts, v.UpdatedAt.UnixMilli())
+		}
+	}
+}
+
+// TestRunIncrementalDetectsRenamedAndResized 验证增量扫能识别 file_name 或
+// size 变化：fallthrough 到原有 update 路径而不是错误地跳过。
+func TestRunIncrementalDetectsRenamedAndResized(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { cat.Close() })
+
+	entries1 := map[string][]drives.Entry{
+		"root": {{ID: "d1", Name: "D1", IsDir: true}},
+		"d1":   {{ID: "f-1", ParentID: "d1", Name: "old.mp4", Size: 100}},
+	}
+	drv1 := &scannerTreeFakeDrive{entries: entries1}
+
+	sc1 := New(cat, drv1, []string{".mp4"}, nil, nil)
+	if _, err := sc1.Run(ctx, ""); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+
+	// 用户改了文件名 / size（模拟网盘上文件被覆盖）
+	entries2 := map[string][]drives.Entry{
+		"root": {{ID: "d1", Name: "D1", IsDir: true}},
+		"d1":   {{ID: "f-1", ParentID: "d1", Name: "new.mp4", Size: 200}},
+	}
+	drv2 := &scannerTreeFakeDrive{entries: entries2}
+
+	sc2 := NewWithOptions(cat, drv2, []string{".mp4"}, nil, nil, true)
+	stats, err := sc2.Run(ctx, "")
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if stats.Skipped != 0 {
+		t.Fatalf("Skipped = %d, want 0 (file_name/size changed — must fall through)", stats.Skipped)
+	}
+	if stats.Scanned != 1 {
+		t.Fatalf("Scanned = %d, want 1 (changed file should run update path)", stats.Scanned)
+	}
+	got, err := cat.GetVideo(ctx, "fake-drive-f-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.FileName != "new.mp4" || got.Size != 200 {
+		t.Fatalf("file_name/size not updated: got %s/%d, want new.mp4/200", got.FileName, got.Size)
+	}
+}
+
+// BenchmarkScanFanOut 对比不同 Concurrency 在"50 目录 × 50 文件"扇形树上的扫描耗时。
+// 树是 BFS 友好形状（广度大，深度 1），最能体现并发收益。10000 文件是模拟
+// "上万份文件" 的目标规模，但 SQLite 写入在 Windows 测试机上较慢，缩小规模
+// 让 CI 也能跑完。
+//
+// 用法：go test -bench BenchmarkScanFanOut -benchmem ./internal/scanner/...
+func BenchmarkScanFanOut(b *testing.B) {
+	const (
+		numDirs    = 50
+		filesPerDir = 50
+	)
+	entries := map[string][]drives.Entry{
+		"root": make([]drives.Entry, 0, numDirs),
+	}
+	for d := 0; d < numDirs; d++ {
+		dirID := fmt.Sprintf("dir-%d", d)
+		entries["root"] = append(entries["root"], drives.Entry{
+			ID: dirID, Name: fmt.Sprintf("D%d", d), IsDir: true,
+		})
+		files := make([]drives.Entry, 0, filesPerDir)
+		for f := 0; f < filesPerDir; f++ {
+			files = append(files, drives.Entry{
+				ID:       fmt.Sprintf("f-%d-%d", d, f),
+				ParentID: dirID,
+				Name:     fmt.Sprintf("dir%d-clip-%d.mp4", d, f),
+				Size:     int64(100 + f),
+			})
+		}
+		entries[dirID] = files
+	}
+
+	for _, concurrency := range []int{1, 4, 8} {
+		b.Run(fmt.Sprintf("Concurrency=%d", concurrency), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				cat, err := catalog.Open(b.TempDir() + "/catalog.db")
+				if err != nil {
+					b.Fatalf("open catalog: %v", err)
+				}
+				drv := &scannerTreeFakeDrive{entries: entries}
+				sc := New(cat, drv, []string{".mp4"}, nil, nil)
+				sc.Concurrency = concurrency
+				if _, err := sc.Run(context.Background(), ""); err != nil {
+					b.Fatalf("scan: %v", err)
+				}
+				if err := cat.Close(); err != nil {
+					b.Fatalf("close: %v", err)
+				}
+			}
+		})
 	}
 }

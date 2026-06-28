@@ -54,6 +54,17 @@ preview:
   segments: 3
   # 预览视频宽度
   width: 480
+  # 2026-06-27 加：按需生成预览视频。
+  #   false (默认) = 扫盘后立即批量入队，访问前就生成。
+  #     优点：首屏立即可播。缺点：万级文件 = 20GB 磁盘 + N 小时 ffmpeg 排队。
+  #   true          = 扫盘后不入队预览视频；详情页首次访问时按需入队。
+  #     缩略图仍然批量生成（每条几十 KB，可忽略）。
+  #     适合文件数量大、磁盘空间有限、或访问集中在少数视频的场景。
+  on_demand: false
+  # 2026-06-27 加：单盘已生成预览视频文件数上限。0 = 不限制。
+  # 超过时按 mtime ASC 删除旧文件。当前 cleanup 实现尚未接入，
+  # 字段保留以便后续版本启用 LRU 淘汰。
+  drive_cap: 0
 
 # 盘列表。上线后请通过管理后台添加，本文件可留空。
 # kind 支持 quark / p115 / p123 / pikpak / wopan / guangyapan / onedrive / googledrive / localstorage。
@@ -106,3 +117,11 @@ bilibili:
   # `Cookie: SESSDATA=<value>`，登录用户可拿到 1080P / 大会员画质。
   # 推荐通过管理后台在「动漫链接解析」设置页里维护，不要直接改 yaml。
   sessdata: ""
+
+# 2026-06-27 加：网盘代理流的字节范围磁盘缓存。
+# 把命中过的 (driveID, fileID, start, end) 元组写到本地，重复请求直接读盘。
+# 适用：夸克等"非 302 网盘"——115/PikPak/123/OneDrive 等走 302 不命中此缓存。
+# 不写 cache_dir / cache_bytes = 关闭（默认，行为不变）。
+proxy:
+  cache_dir: ""
+  cache_bytes: 0

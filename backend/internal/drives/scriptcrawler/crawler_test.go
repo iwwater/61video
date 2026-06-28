@@ -23,27 +23,26 @@ const (
 
 func writeScriptCrawlerFFprobeStub(t *testing.T, dir string, ok bool) string {
 	t.Helper()
-	name := "ffprobe-ok.sh"
-	body := "#!/bin/sh\necho video\nexit 0\n"
+	name := "ffprobe-ok"
+	unixBody := "echo video\nexit 0\n"
+	windowsBody := "echo video\r\nexit /b 0\r\n"
 	if !ok {
-		name = "ffprobe-fail.sh"
-		body = "#!/bin/sh\necho 'moov atom not found' >&2\nexit 1\n"
+		name = "ffprobe-fail"
+		unixBody = "echo moov atom not found 1>&2\nexit 1\n"
+		windowsBody = "echo moov atom not found 1>&2\r\nexit /b 1\r\n"
 	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
-		t.Fatalf("write ffprobe stub: %v", err)
-	}
-	return path
+	return writePlatformScript(t, dir, name, unixBody, windowsBody)
 }
 
 func writeScriptCrawlerFFmpegStub(t *testing.T, dir string) string {
 	t.Helper()
-	path := filepath.Join(dir, "ffmpeg-hls.sh")
-	body := "#!/bin/sh\nif [ -n \"$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE\" ]; then printf '%s\\n' \"$@\" > \"$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE\"; fi\nout=\"\"\nfor arg do out=\"$arg\"; done\nprintf 'hls-video-bytes' > \"$out\"\n"
-	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
-		t.Fatalf("write ffmpeg stub: %v", err)
-	}
-	return path
+	return writePlatformScript(
+		t,
+		dir,
+		"ffmpeg-hls",
+		"if [ -n \"$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE\" ]; then printf '%s\\n' \"$@\" > \"$GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE\"; fi\nout=\"\"\nfor arg do out=\"$arg\"; done\nprintf 'hls-video-bytes' > \"$out\"\n",
+		"if not \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\"==\"\" (\r\n  > \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo -protocol_whitelist\r\n  >> \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo http,https,tcp,tls,crypto\r\n  >> \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo -allowed_extensions\r\n  >> \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo ALL\r\n  >> \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo -allowed_segment_extensions\r\n  >> \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo ALL\r\n  >> \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo -extension_picky\r\n  >> \"%GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE%\" echo 0\r\n)\r\nif \"%GO_SCRIPTCRAWLER_FFMPEG_OUTFILE%\"==\"\" exit /b 2\r\npowershell -NoLogo -NoProfile -Command \"$p = $env:GO_SCRIPTCRAWLER_FFMPEG_OUTFILE; Set-Content -LiteralPath $p -NoNewline -Value 'hls-video-bytes'\"\r\n",
+	)
 }
 
 func TestCrawlerRunOnceImportsLocalFileAndSkipsExisting(t *testing.T) {
@@ -62,24 +61,15 @@ func TestCrawlerRunOnceImportsLocalFileAndSkipsExisting(t *testing.T) {
 	if err := drv.Init(ctx); err != nil {
 		t.Fatalf("driver init: %v", err)
 	}
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
 		Driver:      drv,
 		Catalog:     cat,
 		CrawlerName: "Demo Crawler",
-		PythonPath:  wrapper,
 		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		ScriptPath:  wrapper,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -130,23 +120,14 @@ func TestCrawlerRunOnceMarksPreviewDisabledWhenConfigured(t *testing.T) {
 	if err := drv.Init(ctx); err != nil {
 		t.Fatalf("driver init: %v", err)
 	}
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
 		Driver:         drv,
 		Catalog:        cat,
-		PythonPath:     wrapper,
 		FFprobePath:    writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:     dummyScript,
+		ScriptPath:     wrapper,
 		DisablePreview: true,
 	})
 	res, err := c.RunOnce(ctx, 1)
@@ -201,23 +182,14 @@ func TestCrawlerRunOnceUsesCurrentDrivePreviewSwitch(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed drive: %v", err)
 	}
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
 		Driver:         drv,
 		Catalog:        cat,
-		PythonPath:     wrapper,
 		FFprobePath:    writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:     dummyScript,
+		ScriptPath:     wrapper,
 		DisablePreview: true,
 	})
 	res, err := c.RunOnce(ctx, 1)
@@ -252,24 +224,15 @@ func TestCrawlerRunOnceUsesSourceKindNamespace(t *testing.T) {
 	if err := drv.Init(ctx); err != nil {
 		t.Fatalf("driver init: %v", err)
 	}
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
 		Driver:      drv,
 		Catalog:     cat,
 		SourceKind:  "spider91",
-		PythonPath:  wrapper,
 		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		ScriptPath:  wrapper,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -316,24 +279,15 @@ func TestCrawlerRunOncePassesAbsoluteJobPathsWhenWorkDirDiffers(t *testing.T) {
 	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
 		t.Fatalf("mkdir script dir: %v", err)
 	}
-	dummyScript := filepath.Join(scriptDir, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, scriptDir)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_ASSERT_ABS", "1")
 	c := NewCrawler(CrawlerConfig{
 		Driver:      drv,
 		Catalog:     cat,
-		PythonPath:  wrapper,
 		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		ScriptPath:  wrapper,
 		WorkDir:     scriptDir,
 	})
 	res, err := c.RunOnce(ctx, 1)
@@ -373,15 +327,7 @@ func TestCrawlerRunOnceImportsSimpleMediaURLWithoutSourceID(t *testing.T) {
 	if err := drv.Init(ctx); err != nil {
 		t.Fatalf("driver init: %v", err)
 	}
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_SIMPLE", "1")
@@ -389,9 +335,8 @@ func TestCrawlerRunOnceImportsSimpleMediaURLWithoutSourceID(t *testing.T) {
 	c := NewCrawler(CrawlerConfig{
 		Driver:      drv,
 		Catalog:     cat,
-		PythonPath:  wrapper,
 		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		ScriptPath:  wrapper,
 		HTTPClient:  srv.Client(),
 	})
 	res, err := c.RunOnce(ctx, 1)
@@ -482,24 +427,15 @@ func TestCrawlerRunOnceSkipsFingerprintDuplicateAndContinues(t *testing.T) {
 		t.Fatalf("seed canonical video: %v", err)
 	}
 
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_DUP_UNIQUE", "1")
 	c := NewCrawler(CrawlerConfig{
 		Driver:      drv,
 		Catalog:     cat,
-		PythonPath:  wrapper,
 		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		ScriptPath:  wrapper,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -553,24 +489,15 @@ func TestCrawlerRunOnceRejectsInvalidDownloadedVideo(t *testing.T) {
 	if err := drv.Init(ctx); err != nil {
 		t.Fatalf("driver init: %v", err)
 	}
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	c := NewCrawler(CrawlerConfig{
 		Driver:      drv,
 		Catalog:     cat,
 		CrawlerName: "Demo Crawler",
-		PythonPath:  wrapper,
 		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, false),
-		ScriptPath:  dummyScript,
+		ScriptPath:  wrapper,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -610,28 +537,21 @@ func TestCrawlerRunOnceDownloadsHLSMediaURL(t *testing.T) {
 	if err := drv.Init(ctx); err != nil {
 		t.Fatalf("driver init: %v", err)
 	}
-	dummyScript := filepath.Join(tmp, "helper-script")
-	if err := os.WriteFile(dummyScript, []byte("helper"), 0o755); err != nil {
-		t.Fatalf("write dummy script: %v", err)
-	}
-	wrapper := filepath.Join(tmp, "helper-wrapper.sh")
-	wrapperScript := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestScriptCrawlerHelperProcess \"$@\"\n", os.Args[0])
-	if err := os.WriteFile(wrapper, []byte(wrapperScript), 0o755); err != nil {
-		t.Fatalf("write helper wrapper: %v", err)
-	}
+	wrapper := writeHelperWrapperScript(t, tmp)
 
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HELPER", "1")
 	t.Setenv("GO_WANT_SCRIPTCRAWLER_HLS", "1")
 	ffmpegArgsFile := filepath.Join(tmp, "ffmpeg-args.txt")
+	ffmpegOutFile := filepath.Join(drv.VideosDir(), "hls-source.mp4.part")
 	t.Setenv("GO_SCRIPTCRAWLER_FFMPEG_ARGS_FILE", ffmpegArgsFile)
+	t.Setenv("GO_SCRIPTCRAWLER_FFMPEG_OUTFILE", ffmpegOutFile)
 	c := NewCrawler(CrawlerConfig{
 		Driver:      drv,
 		Catalog:     cat,
 		CrawlerName: "Demo Crawler",
-		PythonPath:  wrapper,
 		FFmpegPath:  writeScriptCrawlerFFmpegStub(t, tmp),
 		FFprobePath: writeScriptCrawlerFFprobeStub(t, tmp, true),
-		ScriptPath:  dummyScript,
+		ScriptPath:  wrapper,
 	})
 	res, err := c.RunOnce(ctx, 1)
 	if err != nil {
@@ -658,7 +578,7 @@ func TestCrawlerRunOnceDownloadsHLSMediaURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read ffmpeg args: %v", err)
 	}
-	argsText := "\n" + string(argsData) + "\n"
+	argsText := "\n" + strings.ReplaceAll(string(argsData), "\r\n", "\n") + "\n"
 	for _, want := range []string{
 		"\n-protocol_whitelist\nhttp,https,tcp,tls,crypto\n",
 		"\n-allowed_extensions\nALL\n",
